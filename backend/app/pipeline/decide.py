@@ -137,17 +137,13 @@ def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
                        review: ReviewRules | None = None) -> list[str]:
     """Why a plan needs the operator. Empty list -> it may be auto-posted.
 
-<<<<<<< HEAD
     Trade-offs go to the operator (low confidence, over fair share, backup route, depot not OPEN, active
     crisis, stale data, draining a depot), and so does real stockout risk (`ReviewRules`): a tank half empty
     and emptying within the horizon, a high stockout probability, a thin margin over the truck's transit,
-    or a shipment that still leaves demand unserved. The dynamic approval deadline
-    auto-approves an unanswered card once waiting starts to cost fuel, so review never starves a station.
-=======
-    An urgent shipment needs the operator while there is still time to review it (the tank lasts at least
-    the truck's trip), or when it takes a large share of the depot's stock, which other stations may need.
-    When the tank runs dry before the truck can arrive it is auto-posted: waiting would only add unserved demand.
->>>>>>> origin/finfin
+    or a shipment that still leaves demand unserved. An urgent shipment also needs the operator while there
+    is still time to review it (the tank lasts at least the truck's trip); when the tank runs dry before the
+    truck can arrive it is auto-posted: waiting would only add unserved demand. The dynamic approval
+    deadline auto-approves an unanswered card once waiting starts to cost fuel.
     Rationing is approved at the policy level: shipments inside a station's fair-share budget
     stay automatic; only over-budget ones need the operator."""
     reasons = _risk_reasons(plan, forecast, review or ReviewRules())

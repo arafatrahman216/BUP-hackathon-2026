@@ -2,11 +2,7 @@ services:
   simulator-api:
     image: asifmahmoud414/bup-fuel-supply-simulator:1.0.0
     environment:
-<<<<<<< HEAD
-      SIMULATION_SPEED: ${SIMULATION_SPEED:-4}
-=======
-      SIMULATION_SPEED: ${SIMULATION_SPEED:-6
->>>>>>> origin/finfin
+      SIMULATION_SPEED: ${SIMULATION_SPEED:-6}
       TICK_MINUTES: ${TICK_MINUTES:-15}
       # Options: paused, running
       SIMULATOR_START_MODE: ${SIMULATOR_START_MODE:-running}

@@ -415,15 +415,12 @@ class PipelineService:
             state.deadlines[rec.id] = {"tick": world.tick + wait_ticks,
                                        "seconds": round(seconds, 1) if tps or hold_left else None,
                                        "tolerance_liters": round(tolerance), "lost_while_waiting": round(lost),
-<<<<<<< HEAD
                                        "confidence": round(confidence, 2),
-                                       "limited_by": "never_dry" if never_dry_binds else ("loss" if cost_wait is not None else "ttl"),
+                                       "limited_by": ("hold" if hold_left > (wait_ticks / tps if tps else 0.0) else
+                                                      "never_dry" if never_dry_binds else
+                                                      "loss" if cost_wait is not None else "ttl"),
                                        "must_keep_liters": round((wait_ticks + L + s.DEADLINE_SAFETY_TICKS) * rate)}
-            if wait_ticks > 0 or (free and age < s.MIN_REVIEW_SECONDS):
-=======
-                                       "confidence": round(confidence, 2)}
             if wait_ticks > 0 or hold_left > 0 or (free and age < s.MIN_REVIEW_SECONDS):
->>>>>>> origin/finfin
                 continue
             # deadline reached: re-check and resize against the current world
             if f.risk == "safe":

@@ -413,7 +413,6 @@ async def test_unanswered_urgent_card_auto_approves_at_its_deadline(client, fake
     assert fake_sim.posts and fake_sim.posts[0]["destination_station_id"] == "station-mirpur"
 
 
-<<<<<<< HEAD
 async def test_deadline_never_lets_the_tank_run_dry(client, fake_sim, monkeypatch, manual_approval):
     monkeypatch.setattr(get_settings(), "DEADLINE_TOLERANCE_TICKS", 100.0)  # loss alone would allow a long wait
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # 3 ticks of fuel, truck needs 2 (+1 safety)
@@ -436,7 +435,8 @@ async def test_deadline_waits_while_the_tank_covers_wait_plus_transit(client, fa
     deadline = rec["deadline"]
     assert deadline["limited_by"] == "never_dry" and 101 < deadline["tick"] <= 101 + 8 - 2 - 1
     assert deadline["must_keep_liters"] <= 800
-=======
+
+
 async def test_card_is_held_for_a_human_however_fast_the_ticks(client, fake_sim, monkeypatch, manual_approval):
     monkeypatch.setattr(get_settings(), "APPROVAL_HOLD_SECONDS", 60.0)
     monkeypatch.setattr(get_settings(), "APPROVAL_MIN_SECONDS", 0.0)
@@ -448,5 +448,4 @@ async def test_card_is_held_for_a_human_however_fast_the_ticks(client, fake_sim,
     state = await run(client)
     (rec,) = state["recommendations"]["open"]
     assert rec["status"] == "PENDING_APPROVAL" and fake_sim.posts == []  # but it is only milliseconds old
-    assert rec["deadline"]["seconds"] > 50
->>>>>>> origin/finfin
+    assert rec["deadline"]["seconds"] > 50 and rec["deadline"]["limited_by"] == "hold"
