@@ -114,6 +114,7 @@ class Settings(BaseSettings):
     EXPLAIN_MAX_TOKENS: int | None = None
     EXPLAIN_PROFILES_PATH: str = ""  # "" -> app/explainability/profiles.json
     EXPLAIN_HISTORY_LIMIT: int = 500  # demand-history rows read per question (max 2000)
+    EXPLAIN_TEMPLATE_DELAY_SECONDS: float = 2.5  # pause (±30%) before a fixed-template answer, like an LLM reply; 0 = none
 
     DEMO_MASK_ERRORS: bool = True  # never show errors on the dashboard: backup data + "ERROR MASKED" log line
 
@@ -126,14 +127,19 @@ class Settings(BaseSettings):
     RATIONING_TRIGGER_DAYS: float = 3.0  # ration a fuel when the network has less than this left
     MIN_CONFIDENCE_AUTO: float = 0.5
     URGENT_REVIEW_DEPOT_SHARE: float = 0.5  # urgent shipment taking more than this share of the depot's stock -> operator
+<<<<<<< HEAD
     REVIEW_RISK_ENABLED: bool = True  # stockout-risk triggers below send shipments to the operator
     REVIEW_FILL_FRACTION: float = 0.5  # tank at/below this share of capacity and empty within the horizon -> operator
     REVIEW_STOCKOUT_PROB: float = 0.3  # stockout probability within the horizon at/above this -> operator
     REVIEW_EMPTY_MARGIN_TICKS: float = 4.0  # empties less than this many ticks after the fastest truck lands -> operator
     DEADLINE_TOLERANCE_TICKS: float = 1.0  # unanswered card auto-approves once waiting 1 more tick loses > this x tick demand
     DEADLINE_SAFETY_TICKS: int = 1  # never-dry cap: approve while the tank still covers wait + transit + this many ticks
+=======
+    DEADLINE_TOLERANCE_TICKS: float = 2.0  # unanswered card auto-approves once waiting 1 more tick loses > this x tick demand
+>>>>>>> origin/finfin
     DEADLINE_CONFIDENCE_SCALE: float = 3.0  # extra ticks of tolerance x (1 - forecast confidence)
-    MIN_REVIEW_SECONDS: float = 10.0  # human reading time, kept only while waiting costs nothing  # below this a recommendation needs the operator
+    MIN_REVIEW_SECONDS: float = 30.0  # human reading time, kept only while waiting costs nothing
+    APPROVAL_HOLD_SECONDS: float = 60.0  # an unanswered card never auto-approves or expires before this age, at any tick speed
     ANOMALY_Z: float = 3.0  # single-tick z-score threshold (needs 2 ticks in a row)
     ANOMALY_CUSUM_K: float = 0.05  # CUSUM slack on log(actual/forecast)
     ANOMALY_CUSUM_H: float = 0.5  # CUSUM alarm level

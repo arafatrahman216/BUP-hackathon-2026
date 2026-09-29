@@ -5,6 +5,8 @@ so an explanation uses the same numbers the system decided with. With no cache y
 pipeline hasn't run), it reads the simulator through the same read / predict / detect code.
 """
 
+import asyncio
+import random
 import time
 from typing import Any
 
@@ -15,8 +17,10 @@ from app.explainability import (
     METRICS, BuiltContext, MetricContext, Profile, ProfileBook, Snapshot, Subject, build_context, build_messages,
     load_profiles,
 )
+from app.explainability import scenario
 from app.explainability.context import unknown_metrics
 from app.models.action_question import ActionQuestion
+from app.models.recommendation import RecommendationStatus
 from app.pipeline.detect import detect, stockout_alerts
 from app.pipeline.predict import Predictor
 from app.pipeline.state import PipelineState
@@ -96,7 +100,9 @@ class ExplainService:
 
     async def ask_about_recommendation(self, rec_id: int, question: str) -> ActionQuestion:
         """The "Ask" button on an approval card / decision-log row. The Q&A is stored."""
-        await self._recommendation(rec_id)
+        rec = await self._recommendation(rec_id)
+        if rec.status == RecommendationStatus.PENDING_APPROVAL and scenario.is_approval_question(question):
+            return await self._approval_scenario(rec_id, question)
         result = await self.explain(ExplainRequest(question=question, profile=RECOMMENDATION_PROFILE,
                                                    recommendation_id=rec_id))
         return await self.questions.create({
@@ -115,6 +121,21 @@ class ExplainService:
         )
 
     # ---------- steps ----------
+    async def _approval_scenario(self, rec_id: int, question: str) -> ActionQuestion:
+        """"Why does this need my approval?" on a pending card: the fixed demo answer, no LLM call."""
+        profile, _, snapshot, built = await self._gather(
+            ContextRequest(profile=RECOMMENDATION_PROFILE, recommendation_id=rec_id))
+        names = {sid: s.get("name", sid) for sid, s in snapshot.world.stations.items()}
+        delay = self.settings.EXPLAIN_TEMPLATE_DELAY_SECONDS
+        if delay > 0:
+            await asyncio.sleep(delay * random.uniform(0.7, 1.3))
+        return await self.questions.create({
+            "recommendation_id": rec_id, "tick": snapshot.world.tick, "question": question,
+            "answer": scenario.approval_answer(built.context, names), "profile": profile.name,
+            "provider": scenario.PROVIDER, "model": scenario.MODEL,
+            "context": built.context, "errors": built.errors,
+        })
+
     async def _recommendation(self, rec_id: int) -> Any:
         rec = await self.recs.get(rec_id)
         if rec is None:

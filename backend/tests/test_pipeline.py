@@ -15,8 +15,8 @@ from tests.fake_simulator import FakeSimulator
 pytestmark = pytest.mark.anyio
 
 # Defaults: rate 100 L/tick, lead 2 ticks, SAFETY_TICKS 8, URGENT_MARGIN 2
-#   cover < 4 -> urgent, cover < 10 -> watch, else safe. Both are auto-posted on the fastest road;
-#   tests of the approval flow use `manual_approval` (auto-post off) to get an operator card.
+#   cover < 4 -> urgent, cover < 10 -> watch, else safe. Urgent with cover >= lead (time to review) -> operator;
+#   urgent that runs dry before the truck arrives and watch -> auto. `manual_approval` turns auto-post off.
 
 
 async def run(client) -> dict:
@@ -60,19 +60,19 @@ async def test_watch_risk_is_auto_posted(client, fake_sim):
     assert len(fake_sim.posts) == 1
 
 
-async def test_urgent_on_fastest_road_is_auto_posted(client, fake_sim):
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent
-    state = await run(client)
-    rec = state["recommendations"]["recent"][0]
+async def test_urgent_with_time_to_review_needs_operator(client, fake_sim):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent, truck needs 2
+    (rec,) = (await run(client))["recommendations"]["open"]
+    assert rec["status"] == "PENDING_APPROVAL" and rec["risk"] == "urgent" and fake_sim.posts == []
+    assert rec["reasons"] == ["urgent: 3.0 ticks of fuel left and the truck needs 2, so there is time to review"]
+
+
+async def test_urgent_that_runs_dry_before_the_truck_is_auto_posted(client, fake_sim):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 100  # empties in 1 tick, truck needs 2
+    rec = (await run(client))["recommendations"]["recent"][0]
     assert rec["risk"] == "urgent" and rec["reasons"] == []
     assert rec["status"] == "POSTED" and rec["decision_mode"] == "auto"
     assert fake_sim.posts[0]["route_id"] == "route-gazipur-mirpur"
-
-
-async def test_urgent_that_arrives_too_late_is_still_auto_posted(client, fake_sim):
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 0  # already empty, truck needs 2 ticks
-    rec = (await run(client))["recommendations"]["recent"][0]
-    assert rec["status"] == "POSTED" and rec["reasons"] == [] and len(fake_sim.posts) == 1
 
 
 async def test_urgent_that_drains_the_depot_needs_operator(client, fake_sim):
@@ -80,7 +80,7 @@ async def test_urgent_that_drains_the_depot_needs_operator(client, fake_sim):
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # arrives in time, but 7,000 of 8,000 L
     (rec,) = (await run(client))["recommendations"]["open"]
     assert rec["status"] == "PENDING_APPROVAL" and fake_sim.posts == []
-    assert rec["reasons"] == ["urgent: takes 88% of depot-gazipur's PETROL stock (8,000 L)"]
+    assert "urgent: takes 88% of depot-gazipur's PETROL stock (8,000 L)" in rec["reasons"]
 
 
 @pytest.fixture
@@ -124,7 +124,7 @@ async def test_operator_edits_and_approves(client, fake_sim, manual_approval):
     assert fake_sim.posts == []
     (rec,) = state["recommendations"]["open"]
     assert rec["status"] == "PENDING_APPROVAL" and rec["important"] and rec["risk"] == "urgent"
-    assert rec["reasons"] == ["auto-post is disabled"]
+    assert "auto-post is disabled" in rec["reasons"]
 
     too_big = await client.post(f"/api/v1/recommendations/{rec['id']}/approve", json={"quantity": 9000})
     assert too_big.status_code == 400 and too_big.json()["error"]["code"] == "QUANTITY_TOO_LARGE"
@@ -413,6 +413,7 @@ async def test_unanswered_urgent_card_auto_approves_at_its_deadline(client, fake
     assert fake_sim.posts and fake_sim.posts[0]["destination_station_id"] == "station-mirpur"
 
 
+<<<<<<< HEAD
 async def test_deadline_never_lets_the_tank_run_dry(client, fake_sim, monkeypatch, manual_approval):
     monkeypatch.setattr(get_settings(), "DEADLINE_TOLERANCE_TICKS", 100.0)  # loss alone would allow a long wait
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # 3 ticks of fuel, truck needs 2 (+1 safety)
@@ -435,3 +436,17 @@ async def test_deadline_waits_while_the_tank_covers_wait_plus_transit(client, fa
     deadline = rec["deadline"]
     assert deadline["limited_by"] == "never_dry" and 101 < deadline["tick"] <= 101 + 8 - 2 - 1
     assert deadline["must_keep_liters"] <= 800
+=======
+async def test_card_is_held_for_a_human_however_fast_the_ticks(client, fake_sim, monkeypatch, manual_approval):
+    monkeypatch.setattr(get_settings(), "APPROVAL_HOLD_SECONDS", 60.0)
+    monkeypatch.setattr(get_settings(), "APPROVAL_MIN_SECONDS", 0.0)
+    monkeypatch.setattr(get_settings(), "DEADLINE_TOLERANCE_TICKS", 0.0)
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
+    await run(client)
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 0  # the deadline in ticks has passed...
+    fake_sim.world["instance"]["tick"] = 100 + 60  # ...and so has APPROVAL_TTL_TICKS
+    state = await run(client)
+    (rec,) = state["recommendations"]["open"]
+    assert rec["status"] == "PENDING_APPROVAL" and fake_sim.posts == []  # but it is only milliseconds old
+    assert rec["deadline"]["seconds"] > 50
+>>>>>>> origin/finfin

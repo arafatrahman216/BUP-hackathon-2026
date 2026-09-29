@@ -137,11 +137,17 @@ def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
                        review: ReviewRules | None = None) -> list[str]:
     """Why a plan needs the operator. Empty list -> it may be auto-posted.
 
+<<<<<<< HEAD
     Trade-offs go to the operator (low confidence, over fair share, backup route, depot not OPEN, active
     crisis, stale data, draining a depot), and so does real stockout risk (`ReviewRules`): a tank half empty
     and emptying within the horizon, a high stockout probability, a thin margin over the truck's transit,
     or a shipment that still leaves demand unserved. The dynamic approval deadline
     auto-approves an unanswered card once waiting starts to cost fuel, so review never starves a station.
+=======
+    An urgent shipment needs the operator while there is still time to review it (the tank lasts at least
+    the truck's trip), or when it takes a large share of the depot's stock, which other stations may need.
+    When the tank runs dry before the truck can arrive it is auto-posted: waiting would only add unserved demand.
+>>>>>>> origin/finfin
     Rationing is approved at the policy level: shipments inside a station's fair-share budget
     stay automatic; only over-budget ones need the operator."""
     reasons = _risk_reasons(plan, forecast, review or ReviewRules())
@@ -151,6 +157,10 @@ def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
         reasons.append("rationing: more than this station's fair share")
     route = world.routes[plan.route_id]
     if plan.risk == "urgent":
+        transit = int(route["transit_ticks"])
+        if plan.ticks_until_empty is not None and plan.ticks_until_empty >= transit:
+            reasons.append(f"urgent: {plan.ticks_until_empty:.1f} ticks of fuel left and the truck needs {transit}, "
+                           "so there is time to review")
         stock = float(world.depots[plan.depot_id]["inventory"].get(plan.fuel_type, 0))
         if stock > 0 and plan.quantity > urgent_depot_share * stock:
             reasons.append(f"urgent: takes {plan.quantity / stock:.0%} of {plan.depot_id}'s "

@@ -410,13 +410,20 @@ class PipelineService:
             age = (datetime.now(timezone.utc) - created).total_seconds()
             free = len(costs) > 1 and costs[1] - costs[0] <= 0 and not never_dry_binds
             tps = state.ticks_per_second
+            hold_left = max(0.0, s.APPROVAL_HOLD_SECONDS - age)
+            seconds = max(wait_ticks / tps if tps else 0.0, hold_left)
             state.deadlines[rec.id] = {"tick": world.tick + wait_ticks,
-                                       "seconds": round(wait_ticks / tps, 1) if tps else None,
+                                       "seconds": round(seconds, 1) if tps or hold_left else None,
                                        "tolerance_liters": round(tolerance), "lost_while_waiting": round(lost),
+<<<<<<< HEAD
                                        "confidence": round(confidence, 2),
                                        "limited_by": "never_dry" if never_dry_binds else ("loss" if cost_wait is not None else "ttl"),
                                        "must_keep_liters": round((wait_ticks + L + s.DEADLINE_SAFETY_TICKS) * rate)}
             if wait_ticks > 0 or (free and age < s.MIN_REVIEW_SECONDS):
+=======
+                                       "confidence": round(confidence, 2)}
+            if wait_ticks > 0 or hold_left > 0 or (free and age < s.MIN_REVIEW_SECONDS):
+>>>>>>> origin/finfin
                 continue
             # deadline reached: re-check and resize against the current world
             if f.risk == "safe":
@@ -471,7 +478,8 @@ class PipelineService:
         expire recommendations before a human can read them."""
         created = rec.created_at if rec.created_at.tzinfo else rec.created_at.replace(tzinfo=timezone.utc)
         age_seconds = (datetime.now(timezone.utc) - created).total_seconds()
-        return tick - rec.tick > self.settings.APPROVAL_TTL_TICKS and age_seconds > self.settings.APPROVAL_MIN_SECONDS
+        min_seconds = max(self.settings.APPROVAL_MIN_SECONDS, self.settings.APPROVAL_HOLD_SECONDS)
+        return tick - rec.tick > self.settings.APPROVAL_TTL_TICKS and age_seconds > min_seconds
 
     async def _refresh_recs(self, stages: list[StageResult]) -> None:
         try:
