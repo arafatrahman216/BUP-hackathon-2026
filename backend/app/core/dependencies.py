@@ -21,6 +21,7 @@ from app.services.ai_service import AIService
 from app.services.dashboard_service import DashboardService
 from app.services.pipeline_service import PipelineService
 from app.services.recommendation_service import RecommendationService
+from app.services.status_service import StatusService
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 LLM = Annotated[LLMClient, Depends(get_llm_client)]
@@ -61,3 +62,7 @@ def get_dashboard_service(session: DbSession, state: State) -> DashboardService:
 def get_stream_service(state: State) -> DashboardService:
     """No DB session: an SSE connection stays open for a long time."""
     return DashboardService(state)
+
+
+def get_status_service(session: DbSession, sim: Simulator, state: State) -> StatusService:
+    return StatusService(session, sim, state)

@@ -9,3 +9,4 @@ httpx>=0.27,<1
 python-multipart>=0.0.9
 pulp>=2.8,<3  # MIP/LP modelling (2.x API)
 highspy>=1.7  # HiGHS solver used through PuLP
+prometheus-client>=0.20  # /metrics for Prometheus + Grafana

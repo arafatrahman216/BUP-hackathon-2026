@@ -20,6 +20,7 @@ Feature requirements live in [features.md](features.md).
 | Frontend | React 19 + Vite operator dashboard (`frontend/`), live via the backend's SSE |
 | Simulator | BUP Fuel Supply Simulator on :8000 (separate compose in `simulator/`); backend on :8001 |
 | Run      | Docker + Docker Compose (hot reload) |
+| Monitoring | Prometheus (`prometheus-client`, scrapes `/api/v1/metrics`) + Grafana "System Status" dashboard (`monitoring/`) |
 
 ## 2. Repository layout
 
@@ -28,6 +29,7 @@ Feature requirements live in [features.md](features.md).
 ├── backend/              FastAPI app (see §3)
 ├── frontend/             operator dashboard (React + Vite, see §8)
 ├── simulator/            simulator compose file + dataset collector
+├── monitoring/           Prometheus scrape config + Grafana provisioning and dashboard (see §9)
 ├── slide/                presentation material
 ├── docker-compose.yml    runs the backend
 ├── design.md             this file
@@ -37,7 +39,7 @@ Feature requirements live in [features.md](features.md).
 
 The backend owns all simulator access; the browser only talks to the backend.
 Routes: `GET /health`, the `/ai` endpoints, the pipeline/dashboard endpoints and
-`/recommendations` (see §7a).
+`/recommendations` (see §7a), and `GET /status` + `GET /metrics` (see §9).
 
 ## 3. Backend
 
@@ -50,13 +52,13 @@ Routes: `GET /health`, the `/ai` endpoints, the pipeline/dashboard endpoints and
 | `core/database.py` | Async engine, `SessionLocal`, `get_db` dependency, `init_db()` (`create_all`). | |
 | `core/exceptions.py` | `AppException` and its subclasses (`BadRequestError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `ExternalServiceError`, `ServiceUnavailableError`). | Services raise these; never return error dicts by hand. |
 | `core/dependencies.py` | Wiring: `get_<x>_service` builds a service with its repositories and clients. Annotated types `DbSession`, `LLM` (AI client), `Storage` (Supabase Storage). | One `get_<feature>_service` per feature. |
-| `controllers/` | FastAPI routers (HTTP layer only). Now: `health_controller.py`, `ai_controller.py`, `pipeline_controller.py` (dashboard, SSE stream, manual run, snapshots), `recommendation_controller.py` (list, approve/edit, reject). `__init__.py` registers every router into `api_router`. | Parse input, call one service method, return. No business logic, no DB access. |
-| `services/` | Business logic. Now: `ai_service.py`, `pipeline_service.py` (one pipeline pass per tick), `recommendation_service.py` (approval + posting), `dashboard_service.py` (cached state + SSE). One `<name>_service.py` with a `<Name>Service` class per feature. | No FastAPI imports (except `UploadFile`); raise `AppException`s. |
+| `controllers/` | FastAPI routers (HTTP layer only). Now: `health_controller.py`, `ai_controller.py`, `pipeline_controller.py` (dashboard, SSE stream, manual run, snapshots), `recommendation_controller.py` (list, approve/edit, reject), `status_controller.py` (`/status` JSON, `/metrics` Prometheus). `__init__.py` registers every router into `api_router`. | Parse input, call one service method, return. No business logic, no DB access. |
+| `services/` | Business logic. Now: `ai_service.py`, `pipeline_service.py` (one pipeline pass per tick), `recommendation_service.py` (approval + posting), `dashboard_service.py` (cached state + SSE), `status_service.py` (component health, p95, error rate; refreshes the Prometheus gauges). One `<name>_service.py` with a `<Name>Service` class per feature. | No FastAPI imports (except `UploadFile`); raise `AppException`s. |
 | `repositories/` | Data access. Now: `storage_repository.py` (Supabase Storage), `simulator_repository.py` (simulator `/v1` client: timeout, retry + backoff, circuit breaker, stale-header detection, both error shapes), `snapshot_repository.py`, `recommendation_repository.py`. One `<name>_repository.py` per table. | The only layer that touches the DB session, the storage API or the simulator. |
 | `models/` | SQLAlchemy ORM: `base.py` has `Base` and `TimestampMixin` (`created_at`, `updated_at`). | Import every new model in `models/__init__.py`, or its table won't be created. |
 | `schemas/` | Pydantic request/response models. Now: `common.py` (`ErrorResponse`, generic `Page[T]`) and `ai.py`. Per resource: `<Name>Create`, `<Name>Update`, `<Name>Read`. | Always set a `response_model`; never return ORM objects raw. |
-| `middlewares/` | `cors.py`, `request_logging.py`, `error_handler.py`, `rate_limiter.py`, and `setup_middlewares()` in `__init__.py`. | See §3.3. |
-| `utils/` | `logger.py` (logging with request ids), `pagination.py` (`page_params` dependency + `build_page` → `Page[T]`). | Framework-agnostic helpers. |
+| `middlewares/` | `cors.py`, `metrics.py` (request count + latency per route template), `request_logging.py`, `error_handler.py`, `rate_limiter.py`, and `setup_middlewares()` in `__init__.py`. | See §3.3. |
+| `utils/` | `logger.py` (logging with request ids), `pagination.py` (`page_params` dependency + `build_page` → `Page[T]`), `metrics.py` (Prometheus registry + 5-min request window). | Framework-agnostic helpers. |
 | `ai/` | Provider-agnostic LLM module (see §4). | |
 | `pipeline/` | Tick pipeline stages (see §7a): `types.py` (World, Forecast, Plan, Alert), `validate.py`, `detect.py` (stateful `Detector`, D1-D7), `demand_model.py` (structural demand model), `twin.py` (deterministic simulator copy + network outlook), `predict.py` (`StructuralPredictor`; baseline `MovingAveragePredictor`), `optimizer.py` (strategic LP + tactical MIP-MPC), `decide.py` (`RulePlanner` baseline/fallback, approval reasons), `explain.py`, `state.py` (in-memory cache + SSE broadcaster), `watcher.py` (SSE listener + polling fallback), `__init__.py` (stage builders: **swap in a model here**). | Stages are pure (no I/O); `PipelineService` does the I/O. |
 
@@ -66,7 +68,7 @@ a throwaway SQLite database. Run it with `cd backend && .venv/bin/pytest`.
 ### 3.2 Request flow
 
 ```
-HTTP → CORS → RequestLogging → CatchAllError → RateLimit → controller
+HTTP → CORS → Metrics → RequestLogging → CatchAllError → RateLimit → controller
      → service → repository → Supabase (Postgres / Storage)
                 → LLMClient → provider chain
 ```
@@ -224,7 +226,8 @@ Not implemented yet: streaming responses, tool/function calling.
 ## 6. Running
 
 ```bash
-docker compose up --build        # db :5432, backend :8001 (docs at /docs), frontend :5173
+docker compose up --build        # db :5432, backend :8001 (docs at /docs), frontend :5173,
+                                 # Prometheus :9090, Grafana :3000 (admin/admin, anonymous view on)
 
 # or locally
 docker compose up -d db          # local Postgres for a host-run backend
@@ -279,6 +282,22 @@ read → validate → save → detect → predict → decide → explain
 | `components/dashboard/` | `StationCard`/`FuelGauge`, `DepotCard`, `PipelineStrip`, `ApprovalCard`, tables, `StatusBadge` |
 | `utils/format.js` | Formatting + risk/status meta (icon + label + color; color never alone) |
 
+## 9. Monitoring and load testing
+
+- `GET /api/v1/status`: `{status, components: {backend_api, database, simulator, prediction, decision}, requests,
+  p95_latency_ms, error_rate, window_seconds}`. Each component is `healthy | degraded | down`:
+  API degraded when > 5% of requests in the last 5 min were 5xx; database = `SELECT 1`; simulator healthy on SSE with a
+  closed circuit and fresh data, degraded on polling / half-open / stale, down when unreachable or open; prediction =
+  worst of the last run's detect + predict stages, decision = decide + post (`ok` healthy, `fallback`/`skipped` degraded,
+  `error` down). Overall = worst component.
+- `GET /api/v1/metrics` (Prometheus text): `http_requests_total{method,route,status}`, `http_request_duration_seconds`
+  (histogram per route template), `component_health{component}` (1 / 0.5 / 0), `simulator_last_latency_seconds`,
+  `database_ping_seconds`, `pipeline_*`, `process_*` (CPU, RSS). `/stream` and `/metrics` are not counted.
+- Grafana dashboard `monitoring/grafana/dashboards/system-status.json` is generated by
+  `monitoring/grafana/build_dashboard.py` (edit the script, re-run, Grafana reloads the file).
+- Load test: `backend/.venv/bin/python backend/scripts/load_test.py` (closed loop, per-endpoint concurrency steps,
+  avg/p50/p95/p99, throughput, error rate, container CPU/memory) → `backend/scripts/load_results/`.
+
 ## 7. Decision log
 
 Add a row whenever a design choice is made. Newest at the bottom.
@@ -324,3 +343,6 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | Intelligence | Demand noise is uniform ±profile noise (measured: ratios 0.900-1.100), so the error floor is noise/√3; past demand is de-spiked by event windows, including RESOLVED spikes | Measured on simulator/dataset; the old floor overstated risk 1.7×, and resolved spikes leaked into the base rate after a restart |
 | 2026-09-29 | Decisions | Unanswered approval cards auto-approve at a **dynamic deadline**: each tick the simulator copy prices waiting 0..H ticks; the card waits while the extra unserved liters stay within `demand per tick × (DEADLINE_TOLERANCE_TICKS + DEADLINE_CONFIDENCE_SCALE × (1 − confidence))`, capped by APPROVAL_TTL_TICKS; at the deadline it is re-checked and resized (fair share, bridge amount for low confidence, dispatch/tank room) or expired if no longer needed; logged as `auto-deadline` | User decision: human review must never starve a station; unsure forecasts buy the operator more time |
 | 2026-09-29 | Integration | Simulator timeout 10 s, timeouts are not retried (connection errors / 5xx still are); SSE idle timeout `SIMULATOR_STREAM_IDLE_SECONDS` (30 s) reconnects a silent stream | Tested with injected faults: a 5 s latency fault made every 5 s-timeout read fail (x3 with retries), so the pipeline did nothing; a half-open stream was never noticed |
+| 2026-09-29 | Monitoring | `prometheus-client` with its own registry; metrics labeled by route template, not raw path; `/status` computes p95 / error rate from an in-process 5-min window so it works without Prometheus | Bounded label cardinality; the JSON status must not depend on the monitoring stack being up |
+| 2026-09-29 | Monitoring | Prometheus + Grafana as compose services; datasource and dashboard provisioned from files, dashboard JSON generated by a script | One command brings up the System Status view; the dashboard is reviewable code |
+| 2026-09-29 | Pipeline | CPU-bound stages (predict, MIP decide) run in `asyncio.to_thread` | Load test: running them on the event loop stalled every API request for ~0.5 s per tick; throughput fell as clients were added |

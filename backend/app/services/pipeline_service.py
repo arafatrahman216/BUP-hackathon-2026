@@ -448,7 +448,9 @@ class PipelineService:
 
 
 async def _async(fn: Callable, *args: Any) -> Any:
-    return fn(*args)
+    """CPU-bound stages (predict, MIP decide) run in a worker thread so the event loop keeps
+    serving the API meanwhile; run_lock keeps runs sequential."""
+    return await asyncio.to_thread(fn, *args)
 
 
 def masked(where: str, exc: BaseException) -> None:

@@ -62,3 +62,14 @@ trucks, incoming ships and crises, decision log, stale banner.
 - Settings: `PREDICTOR`, `PLANNER`, `FORECAST_HORIZON_TICKS`, `HISTORY_FETCH_ROWS`, `PLANNER_TIME_LIMIT_SECONDS`, `RATIONING_TRIGGER_DAYS`, `MIN_CONFIDENCE_AUTO`, `ANOMALY_*`.
 - Benchmark: `backend/scripts/bench_forecast.py` (walk-forward WAPE). Tests: `tests/test_intelligence.py`.
 - Not done: explain (deferred), daily-bucket strategic LP, 8-scenario test bench.
+
+### System status, Prometheus + Grafana, load test
+**Status:** done
+**What:** Health of each component (Backend API, Database, Fuel Simulator, Prediction Service, Decision Engine),
+p95 latency and error rate, as JSON and as Prometheus metrics with a Grafana dashboard; a repeatable load test.
+**Notes:**
+- Endpoints: `GET /status`, `GET /metrics`. Code: `middlewares/metrics.py`, `utils/metrics.py`, `services/status_service.py`,
+  `controllers/status_controller.py`. Tests: `tests/test_status.py`.
+- Compose: `prometheus` (:9090), `grafana` (:3000, dashboard "Fuel Ops - System Status"). Config in `monitoring/`.
+- Load test: `backend/scripts/load_test.py`; results in `backend/scripts/load_results/`.
+
