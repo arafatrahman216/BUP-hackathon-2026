@@ -15,8 +15,9 @@ from tests.fake_simulator import FakeSimulator
 pytestmark = pytest.mark.anyio
 
 # Defaults: rate 100 L/tick, lead 2 ticks, SAFETY_TICKS 8, URGENT_MARGIN 2
-#   cover < 4 -> urgent, cover < 10 -> watch, else safe. Urgent with cover >= lead (time to review) -> operator;
-#   urgent that runs dry before the truck arrives and watch -> auto. `manual_approval` turns auto-post off.
+#   cover < 4 -> urgent, cover < 10 -> watch, else safe. A low station whose depot has plenty is auto-posted;
+#   only trade-offs (depot short / drained, crisis, backup road, ...) need the operator.
+#   `manual_approval` turns auto-post off.
 
 
 async def run(client) -> dict:
@@ -60,11 +61,11 @@ async def test_watch_risk_is_auto_posted(client, fake_sim):
     assert len(fake_sim.posts) == 1
 
 
-async def test_urgent_with_time_to_review_needs_operator(client, fake_sim):
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent, truck needs 2
-    (rec,) = (await run(client))["recommendations"]["open"]
-    assert rec["status"] == "PENDING_APPROVAL" and rec["risk"] == "urgent" and fake_sim.posts == []
-    assert rec["reasons"] == ["urgent: 3.0 ticks of fuel left and the truck needs 2, so there is time to review"]
+async def test_urgent_with_a_full_depot_is_auto_posted(client, fake_sim):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent; depot holds 45,000 L
+    rec = (await run(client))["recommendations"]["recent"][0]
+    assert rec["risk"] == "urgent" and rec["reasons"] == []
+    assert rec["status"] == "POSTED" and rec["decision_mode"] == "auto"
 
 
 async def test_urgent_that_runs_dry_before_the_truck_is_auto_posted(client, fake_sim):
@@ -88,34 +89,41 @@ def risk_review(monkeypatch):
     monkeypatch.setattr(get_settings(), "REVIEW_RISK_ENABLED", True)
 
 
-async def test_half_empty_tank_emptying_soon_needs_operator(client, fake_sim, risk_review):
-    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800  # 4% full, empty in 8 ticks, truck needs 2
+async def test_low_station_with_a_full_depot_is_auto_posted(client, fake_sim, risk_review):
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800  # 4% full, depot-gazipur holds 60,000 L
+    rec = (await run(client))["recommendations"]["recent"][0]
+    assert rec["reasons"] == [] and rec["status"] == "POSTED"
+
+
+async def test_depot_short_needs_operator(client, fake_sim, risk_review):
+    fake_sim.world["depots"][0]["inventory"]["PETROL"] = 5000  # the whole depot goes to Mirpur
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 800  # watch
     (rec,) = (await run(client))["recommendations"]["open"]
     assert rec["status"] == "PENDING_APPROVAL" and fake_sim.posts == []
-    assert rec["reasons"] == ["tank at 4% (800 / 18,000 L), burning 100 L/tick: empty in ~8.0 ticks without a delivery"]
+    (reason,) = rec["reasons"]
+    assert reason.startswith("depot short: depot-gazipur PETROL: after this tick's shipments 0 L are left")
+    assert "this station is at 6% (800 L)" in reason
 
 
-async def test_fast_drain_needs_operator(client, fake_sim, risk_review):
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # empty in 3 ticks, truck needs 2
-    (rec,) = (await run(client))["recommendations"]["open"]
-    assert rec["status"] == "PENDING_APPROVAL"
-    assert "fast drain: empty in ~3.0 ticks, fastest truck needs 2 (only 1.0 ticks to spare)" in rec["reasons"]
-
-
-def test_risk_reasons_use_stockout_probability_and_shipment_impact():
-    from app.pipeline.decide import ReviewRules, _risk_reasons
+def test_depot_balance_flags_contention_and_ignores_plenty():
+    from app.pipeline.decide import ReviewRules, _scarcity_reasons, depot_balances
     from app.pipeline.types import Forecast, Plan
-    f = Forecast("s", "DIESEL", inventory=9000, capacity=10000, rate_per_tick=100, incoming=0,
-                 ticks_until_empty=90, cover_ticks=90, lead_ticks=2, risk="watch", p_stockout=0.45)
-    plan = Plan("s", "DIESEL", "d", "r", 5000, "watch", 90,
-                impact={"unmet_before": 1200, "unmet_after": 400})
-    assert _risk_reasons(plan, f, ReviewRules()) == [
-        "stockout risk 45% within the forecast horizon (threshold 30%)",
-        "not enough: even with this shipment ~400 L stay unserved (vs ~1,200 L without it)",
-    ]
-    f.p_stockout, plan.impact = 0.1, {}
-    assert _risk_reasons(plan, f, ReviewRules()) == []  # 90% full, safe -> auto
-    assert _risk_reasons(plan, f, ReviewRules(enabled=False)) == []
+    w = FakeSimulator().world
+    world = World(instance=w["instance"], depots={d["id"]: d for d in w["depots"]},
+                  stations={s["id"]: s for s in w["stations"]}, routes={r["id"]: r for r in w["routes"]},
+                  supply=[], events=[], allocations=[], history=[], metrics={})
+    fc = {(sid, "PETROL"): Forecast(sid, "PETROL", inventory=500, capacity=10000, rate_per_tick=100, incoming=0,
+                                    ticks_until_empty=5, cover_ticks=5, lead_ticks=2, risk="urgent")
+          for sid in ("station-mirpur", "station-tongi")}
+    plans = [Plan(sid, "PETROL", "depot-gazipur", "r", 7000, "urgent", 5) for sid in ("station-mirpur", "station-tongi")]
+    plenty = depot_balances(world, fc, plans, 24)  # 45,000 L - 14,000 L = 155 ticks of 200 L/tick
+    assert _scarcity_reasons(plans[0], fc[("station-mirpur", "PETROL")], ReviewRules(), plenty) == []
+    world.depots["depot-gazipur"]["inventory"]["PETROL"] = 10000  # 14,000 L planned from 10,000 L
+    short = depot_balances(world, fc, plans, 24)
+    (reason,) = _scarcity_reasons(plans[0], fc[("station-mirpur", "PETROL")], ReviewRules(), short)
+    assert "planned shipments (14,000 L) exceed what it can give (10,000 L)" in reason
+    assert "1 other station(s) it supplies are also at risk" in reason
+    assert _scarcity_reasons(plans[0], fc[("station-mirpur", "PETROL")], ReviewRules(enabled=False), short) == []
 
 
 async def test_operator_edits_and_approves(client, fake_sim, manual_approval):

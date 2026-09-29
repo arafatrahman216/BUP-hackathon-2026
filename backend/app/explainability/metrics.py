@@ -134,15 +134,12 @@ def risk_rules(ctx: MetricContext) -> Any:
         "operator_review": (f"forecast confidence below {r.get('MIN_CONFIDENCE_AUTO')}, rationing over a station's fair share, "
                             "backup route, depot not OPEN, an ACTIVE crisis touching the station/region/"
                             "depot/route, stale data" + ("" if r.get("AUTO_POST_ENABLED", True) else ", or auto-post disabled (it is)")
-                            + ", an urgent shipment while the tank still lasts the truck's trip (time to review), or an "
-                            f"urgent shipment taking more than {r.get('URGENT_REVIEW_DEPOT_SHARE', 0.5):.0%} of the depot's stock"
-                            + ((f", or stockout risk: tank at or below {r.get('REVIEW_FILL_FRACTION', 0.5):.0%} full and empty "
-                                f"within {r.get('FORECAST_HORIZON_TICKS')} ticks, stockout probability at or above "
-                                f"{r.get('REVIEW_STOCKOUT_PROB', 0.3):.0%}, less than {r.get('REVIEW_EMPTY_MARGIN_TICKS', 4)} ticks "
-                                "between empty and the fastest truck landing, or demand still unserved with the shipment")
+                            + f", an urgent shipment taking more than {r.get('URGENT_REVIEW_DEPOT_SHARE', 0.5):.0%} of the depot's stock"
+                            + ((f", or the depot short on that fuel (left after this tick's shipments covers fewer than "
+                                f"{r.get('REVIEW_DEPOT_COVER_TICKS', 24)} ticks of its stations' demand, or plans exceed its stock)")
                                if r.get("REVIEW_RISK_ENABLED", True) else "")
-                            + " -> PENDING_APPROVAL; otherwise auto-posted. An urgent shipment to a tank that runs dry "
-                            "before the truck can arrive is auto-posted at once, because waiting would only add unserved demand. "
+                            + " -> PENDING_APPROVAL; otherwise auto-posted (a low station with a well-stocked depot is auto-posted "
+                            "at once: the fastest truck is the only sensible answer). "
                             "An unanswered card auto-approves at a dynamic deadline once waiting would add unserved demand, "
                             "and no later than the tank still holding "
                             f"(wait + transit + {r.get('DEADLINE_SAFETY_TICKS', 1)}) ticks of demand, but never before it is "

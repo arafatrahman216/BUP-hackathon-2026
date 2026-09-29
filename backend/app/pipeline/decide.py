@@ -97,66 +97,106 @@ def _event_touches(event: dict[str, Any], world: World, plan: Plan) -> bool:
 
 @dataclass
 class ReviewRules:
-    """Stockout-risk triggers that send a shipment to the operator before the tank is nearly empty."""
+    """Scarcity review: a low station alone is not a reason to ask the operator (with fuel in the depot the
+    fastest truck is the only sensible answer). The operator is asked when the depot serving the shipment is
+    short, so sending fuel here means another station may go without."""
 
     enabled: bool = True
-    fill_fraction: float = 0.5  # tank at or below this share of capacity ...
-    fill_horizon_ticks: float = 24.0  # ... and empties within this many ticks at the current rate
-    stockout_prob: float = 0.3  # chance of running dry within the forecast horizon
-    empty_margin_ticks: float = 4.0  # empties less than this many ticks after the fastest truck can land
+    depot_cover_ticks: float = 24.0  # depot short: left after this tick's shipments + supply due covers fewer ticks
+    horizon_ticks: int = 24  # supply arrivals counted within this window
+    reserve: float = 0.0  # DEPOT_RESERVE_LITERS
 
 
-def _risk_reasons(plan: Plan, f: Forecast | None, rules: ReviewRules) -> list[str]:
-    """Why this station is at real risk of running dry: each reason carries the numbers behind it."""
-    if not rules.enabled or f is None:
+@dataclass
+class DepotBalance:
+    """One depot x fuel this tick: what is there, what we plan to take, and who depends on it."""
+
+    stock: float
+    planned: float  # liters of this tick's plans (+ already-approved cards) leaving this depot
+    supply_due: float  # supply ships landing within the horizon
+    demand_per_tick: float  # forecast demand of every station this depot can reach
+    stations: int
+    stations_at_risk: int  # of those, watch / urgent / outage
+
+    @property
+    def left(self) -> float:
+        return self.stock - self.planned + self.supply_due
+
+    def cover_ticks(self, reserve: float) -> float | None:
+        return (self.left - reserve) / self.demand_per_tick if self.demand_per_tick > 0 else None
+
+
+def depot_balances(world: World, forecasts: dict[tuple[str, str], Forecast], plans: list[Plan],
+                   horizon: int, approved: list[tuple[str, str, float]] = ()) -> dict[tuple[str, str], DepotBalance]:
+    """Depot x fuel balance after this tick's plans; `approved` = (depot, fuel, liters) of approved cards."""
+    from app.pipeline.twin import supply_arrivals
+
+    supply = supply_arrivals(world)
+    out: dict[tuple[str, str], DepotBalance] = {}
+    for d, dep in world.depots.items():
+        for fuel in dep.get("capacity", {}):
+            served = {r["destination_station_id"] for r in world.routes.values() if r["source_depot_id"] == d}
+            fcs = [forecasts[(sid, fuel)] for sid in served if (sid, fuel) in forecasts]
+            out[(d, fuel)] = DepotBalance(
+                stock=float(dep["inventory"].get(fuel, 0)),
+                planned=sum(p.quantity for p in plans if p.depot_id == d and p.fuel_type == fuel)
+                + sum(q for dd, ff, q in approved if dd == d and ff == fuel),
+                supply_due=sum(v for (dd, ff, k), v in supply.items() if dd == d and ff == fuel and k < horizon),
+                demand_per_tick=sum(f.rate_per_tick or 0.0 for f in fcs),
+                stations=len(fcs), stations_at_risk=sum(f.risk in ("watch", "urgent", "outage") for f in fcs))
+    return out
+
+
+def _station_context(f: Forecast | None) -> str:
+    if f is None or not f.capacity:
+        return ""
+    tue = f"empty in ~{f.ticks_until_empty:.1f} ticks" if f.ticks_until_empty is not None else "not emptying"
+    return f"; this station is at {f.inventory / f.capacity:.0%} ({f.inventory:,.0f} L), {tue}"
+
+
+def _scarcity_reasons(plan: Plan, f: Forecast | None, rules: ReviewRules,
+                      balances: dict[tuple[str, str], DepotBalance] | None) -> list[str]:
+    """Depot short on this fuel: the shipment competes with other stations for what is left."""
+    if not rules.enabled or not balances or (plan.depot_id, plan.fuel_type) not in balances:
         return []
-    reasons = []
-    tue = f.ticks_until_empty if f.ticks_until_empty is not None else plan.ticks_until_empty
-    rate = f.rate_per_tick or 0.0
-    fill = f.inventory / f.capacity if f.capacity else None
-    if fill is not None and fill <= rules.fill_fraction and tue is not None and tue <= rules.fill_horizon_ticks:
-        reasons.append(f"tank at {fill:.0%} ({f.inventory:,.0f} / {f.capacity:,.0f} L), burning {rate:,.0f} L/tick: "
-                       f"empty in ~{tue:.1f} ticks without a delivery")
-    if f.p_stockout is not None and f.p_stockout >= rules.stockout_prob:
-        reasons.append(f"stockout risk {f.p_stockout:.0%} within the forecast horizon "
-                       f"(threshold {rules.stockout_prob:.0%})")
-    if tue is not None and f.lead_ticks is not None and tue - f.lead_ticks < rules.empty_margin_ticks:
-        margin = tue - f.lead_ticks
-        reasons.append(f"fast drain: empty in ~{tue:.1f} ticks, fastest truck needs {f.lead_ticks} "
-                       + (f"(only {margin:.1f} ticks to spare)" if margin >= 0 else f"(dry ~{-margin:.1f} ticks before it lands)"))
-    unmet_after = plan.impact.get("unmet_after") if plan.impact else None
-    if unmet_after:
-        reasons.append(f"not enough: even with this shipment ~{unmet_after:,.0f} L stay unserved "
-                       f"(vs ~{plan.impact.get('unmet_before', 0):,.0f} L without it)")
-    return reasons
+    b = balances[(plan.depot_id, plan.fuel_type)]
+    cover = b.cover_ticks(rules.reserve)
+    if b.planned > b.stock - rules.reserve:
+        why = (f"planned shipments ({b.planned:,.0f} L) exceed what it can give ({b.stock - rules.reserve:,.0f} L)")
+    elif cover is not None and cover < rules.depot_cover_ticks:
+        why = (f"after this tick's shipments {b.left - rules.reserve:,.0f} L are left"
+               + (f" (incl. {b.supply_due:,.0f} L of supply due)" if b.supply_due else "")
+               + f" = ~{cover:.1f} ticks for its {b.stations} stations ({b.demand_per_tick:,.0f} L/tick), "
+               f"below {rules.depot_cover_ticks:g}")
+    else:
+        return []
+    others = b.stations_at_risk - (1 if f is not None and f.risk in ("watch", "urgent", "outage") else 0)
+    return [f"depot short: {plan.depot_id} {plan.fuel_type}: {why}"
+            + (f"; {others} other station(s) it supplies are also at risk" if others > 0 else "")
+            + _station_context(f)]
 
 
 def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
                        min_confidence: float = 0.0, rationing: bool = False,
                        urgent_depot_share: float = 0.5, forecast: Forecast | None = None,
-                       review: ReviewRules | None = None) -> list[str]:
+                       review: ReviewRules | None = None,
+                       balances: dict[tuple[str, str], DepotBalance] | None = None) -> list[str]:
     """Why a plan needs the operator. Empty list -> it may be auto-posted.
 
-    Trade-offs go to the operator (low confidence, over fair share, backup route, depot not OPEN, active
-    crisis, stale data, draining a depot), and so does real stockout risk (`ReviewRules`): a tank half empty
-    and emptying within the horizon, a high stockout probability, a thin margin over the truck's transit,
-    or a shipment that still leaves demand unserved. An urgent shipment also needs the operator while there
-    is still time to review it (the tank lasts at least the truck's trip); when the tank runs dry before the
-    truck can arrive it is auto-posted: waiting would only add unserved demand. The dynamic approval
-    deadline auto-approves an unanswered card once waiting starts to cost fuel.
+    Only real trade-offs go to the operator: low confidence, over fair share, backup route, depot not OPEN,
+    active crisis, stale data, one shipment draining a depot, or the depot short on this fuel (`ReviewRules`:
+    what is left after this tick covers too few ticks for the stations it supplies). A station running low
+    while its depot has plenty is NOT a reason: the fastest truck is the only sensible answer, so it auto-posts.
+    The dynamic approval deadline auto-approves an unanswered card before the tank runs dry.
     Rationing is approved at the policy level: shipments inside a station's fair-share budget
     stay automatic; only over-budget ones need the operator."""
-    reasons = _risk_reasons(plan, forecast, review or ReviewRules())
+    reasons = _scarcity_reasons(plan, forecast, review or ReviewRules(), balances)
     if plan.confidence is not None and plan.confidence < min_confidence:
         reasons.append(f"low forecast confidence ({plan.confidence:.2f})")
     if rationing and plan.over_budget:
         reasons.append("rationing: more than this station's fair share")
     route = world.routes[plan.route_id]
     if plan.risk == "urgent":
-        transit = int(route["transit_ticks"])
-        if plan.ticks_until_empty is not None and plan.ticks_until_empty >= transit:
-            reasons.append(f"urgent: {plan.ticks_until_empty:.1f} ticks of fuel left and the truck needs {transit}, "
-                           "so there is time to review")
         stock = float(world.depots[plan.depot_id]["inventory"].get(plan.fuel_type, 0))
         if stock > 0 and plan.quantity > urgent_depot_share * stock:
             reasons.append(f"urgent: takes {plan.quantity / stock:.0%} of {plan.depot_id}'s "

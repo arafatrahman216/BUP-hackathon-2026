@@ -262,14 +262,14 @@ read → validate → save → detect → predict → decide → explain
   - *decide*: for `watch`/`urgent` (lowest cover first), fastest AVAILABLE route; qty = min(free space after incoming,
     route max, depot stock − reserve, depot dispatch left this tick), floored to 100 L, ≥ `MIN_SHIPMENT_LITERS`.
     Skips station/fuels with an open recommendation. Unplannable needs are reported as `blocked`.
-  - *important?* low confidence, rationing over fair share, backup route, depot not OPEN, an ACTIVE crisis touching
-    the station/region/depot/route, stale data, `AUTO_POST_ENABLED=false`, an urgent shipment while the tank still
-    lasts the truck's trip (time to review), or an urgent shipment taking more than `URGENT_REVIEW_DEPOT_SHARE` (50%)
-    of the depot's stock → `PENDING_APPROVAL`, **or stockout risk** (`REVIEW_RISK_ENABLED`, `ReviewRules`): tank ≤
-    `REVIEW_FILL_FRACTION` (50%) full and empty within `FORECAST_HORIZON_TICKS`, stockout probability ≥ `REVIEW_STOCKOUT_PROB`
-    (30%), less than `REVIEW_EMPTY_MARGIN_TICKS` (4) between "empty" and the fastest truck landing, or demand still unserved
-    with the shipment (simulator copy). Each reason carries its numbers. Otherwise `APPROVED` (auto). An urgent shipment to a
-    tank that runs dry before the truck can arrive auto-posts. Unanswered cards auto-approve at the dynamic deadline, which is
+  - *important?* only real trade-offs: low confidence, rationing over fair share, backup route, depot not OPEN, an ACTIVE
+    crisis touching the station/region/depot/route, stale data, `AUTO_POST_ENABLED=false`, an urgent shipment taking more
+    than `URGENT_REVIEW_DEPOT_SHARE` (50%) of the depot's stock, or the **depot short on that fuel** (`REVIEW_RISK_ENABLED`,
+    `ReviewRules`/`depot_balances`): this tick's plans (+ approved cards) exceed its stock − reserve, or what is left
+    (+ supply due within the horizon) covers fewer than `REVIEW_DEPOT_COVER_TICKS` (24) ticks of the forecast demand of
+    every station it can reach; the reason names the numbers, other at-risk stations and this station's level
+    → `PENDING_APPROVAL`. Otherwise `APPROVED` (auto). **A low or empty station whose depot has plenty is never a reason:**
+    the fastest truck is the only sensible answer. Unanswered cards auto-approve at the dynamic deadline, which is
     capped so the tank never runs dry, but never before `APPROVAL_HOLD_SECONDS` (below).
   - *explain*: template text.
   - *re-check* (right before every post, `pipeline.decide.recheck`): the plan is re-fitted to the current world with
@@ -425,3 +425,4 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | Decisions | Approval deadline extended: `DEADLINE_TOLERANCE_TICKS` 1.0 → 2.0 (a card may cost up to 2 ticks of the station's demand before it auto-approves), `MIN_REVIEW_SECONDS` 10 → 30 | User request: operators need more time to read a card before it approves itself |
 | 2026-09-29 | Decisions | `APPROVAL_HOLD_SECONDS` (60 s): an unanswered card never auto-approves or expires before this wall-clock age, whatever the tick-based deadline says | User request: at 5 ticks/s a tick deadline passes in under a second, too fast to pause the simulator and read the card; while paused no pipeline runs, so nothing auto-approves |
 | 2026-09-29 | Decisions | Merge of the two approval policies: stockout-risk triggers **and** the urgent-with-time-to-review trigger both apply; `APPROVAL_HOLD_SECONDS` **wins over the never-dry cap** (a card is never auto-approved before 60 s, even if the tank runs dry meanwhile); the deadline reports `limited_by: hold` then | User decision when merging `finfin` into `suprio` |
+| 2026-09-29 | Decisions | **Station risk alone never needs the operator** (supersedes the "stockout risk" and "urgent while the tank still lasts the truck's trip" rows above): a shipment is reviewed only on a trade-off, now including **depot short** (plans exceed stock, or what is left covers < `REVIEW_DEPOT_COVER_TICKS` of its stations' demand) | User decision: a full depot and an empty station has one sensible answer (send the fastest truck); review only makes sense when fuel given here is fuel another station may lack |
