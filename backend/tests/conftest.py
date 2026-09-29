@@ -20,6 +20,8 @@ os.environ.update({
     "SIMULATOR_RETRIES": "0",
     "SIMULATOR_BACKOFF_SECONDS": "0",
     "SIMULATOR_BREAKER_THRESHOLD": "100",
+    "EXPLAIN_TEMPLATE_DELAY_SECONDS": "0",
+    "APPROVAL_HOLD_SECONDS": "0",  # tests answer cards in milliseconds; test_pipeline.py covers the hold
 })
 
 import httpx  # noqa: E402

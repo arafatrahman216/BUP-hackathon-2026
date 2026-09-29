@@ -134,10 +134,10 @@ def risk_rules(ctx: MetricContext) -> Any:
         "operator_review": (f"forecast confidence below {r.get('MIN_CONFIDENCE_AUTO')}, rationing over a station's fair share, "
                             "backup route, depot not OPEN, an ACTIVE crisis touching the station/region/"
                             "depot/route, stale data" + ("" if r.get("AUTO_POST_ENABLED", True) else ", or auto-post disabled (it is)")
-                            + ", or an urgent shipment taking more than "
-                            f"{r.get('URGENT_REVIEW_DEPOT_SHARE', 0.5):.0%} of the depot's stock -> PENDING_APPROVAL; otherwise "
-                            "auto-posted. Other urgent shipments are auto-posted at once, even when the tank is already empty, "
-                            "because waiting would only add unserved demand"),
+                            + ", an urgent shipment while the tank still lasts the truck's trip (time to review), or an "
+                            f"urgent shipment taking more than {r.get('URGENT_REVIEW_DEPOT_SHARE', 0.5):.0%} of the depot's "
+                            "stock -> PENDING_APPROVAL; otherwise auto-posted. An urgent shipment to a tank that runs dry "
+                            "before the truck can arrive is auto-posted at once, because waiting would only add unserved demand"),
         "rationing": f"a fuel is rationed when the network has less than {r.get('RATIONING_TRIGGER_DAYS')} days of it left",
         "expiry": f"open recommendations expire after {r.get('APPROVAL_TTL_TICKS')} ticks and {r.get('APPROVAL_MIN_SECONDS')} s",
     }

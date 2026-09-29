@@ -142,6 +142,21 @@ async def test_ask_about_a_recommendation_is_stored(client, fake_sim, gemini, ma
     assert [q["question"] for q in history["items"]] == ["Can I send less, and how long would it last?"]
 
 
+async def test_why_approval_on_a_pending_card_is_the_scenario_template(client, fake_sim, gemini, manual_approval):
+    fake_sim.world["depots"][0]["inventory"]["PETROL"] = 8000
+    rec = await urgent_recommendation(client, fake_sim)
+    body = (await client.post(f"/api/v1/explain/recommendations/{rec['id']}",
+                              json={"question": "Why does this need my approval?"})).json()
+    assert body["provider"] == "template" and not hasattr(gemini, "messages")  # no LLM call
+    answer = body["answer"]
+    assert answer.startswith('**"One depot, two stations running dry"**')
+    assert "* Gazipur Depot has 8,000 L of petrol left" in answer
+    assert "the optimizer plans 7,000 L for it. That's 88% of the depot's stock" in answer
+    assert '* Tongi also runs on Gazipur Depot petrol and is on "watch"' in answer and "only 1,000 L left" in answer
+    assert "* edit it down to about 4,000 L so both stations get something" in answer
+    assert body["context"]["action"]["id"] == rec["id"]
+
+
 async def test_old_action_is_flagged(client, fake_sim, manual_approval):
     rec = await urgent_recommendation(client, fake_sim)
     fake_sim.world["instance"]["tick"] = 130

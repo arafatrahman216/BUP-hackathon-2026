@@ -10,6 +10,7 @@ const DEMO_TICK_MS = 3000
 const THEME_KEY = 'fuelops.theme'
 const AI_BADGE = 'Written by AI'
 const TEMPLATE_BADGE = 'Template text · AI unavailable'
+const ENGINE_BADGE = 'Written by the decision engine'
 // demo answers are keyed by these (utils/console/demo.js); live questions come from the backend
 const DEMO_QUESTIONS = ['Why not Patiya?', 'Wait an hour?', 'If the road closes?']
 const WHY = {
@@ -21,7 +22,8 @@ const providerName = (p) => (p ? p.charAt(0).toUpperCase() + p.slice(1) : null)
 /** A stored backend Q&A → the answer shape the console shows. */
 export const toAnswer = (qa) => ({
   q: qa.question, text: qa.answer, at: qa.tick, context: qa.context,
-  badge: providerName(qa.provider) ? `${AI_BADGE} (${providerName(qa.provider)} · ${qa.model})` : AI_BADGE,
+  badge: qa.provider === 'template' ? ENGINE_BADGE
+    : providerName(qa.provider) ? `${AI_BADGE} (${providerName(qa.provider)} · ${qa.model})` : AI_BADGE,
 })
 
 function readTheme() {
@@ -174,6 +176,6 @@ export function useConsole() {
     ask,
     questions,
     // badge for stored explanations (log modal): the backend's are engine-written templates
-    logBadge: model?.aiDown ? TEMPLATE_BADGE : source === 'demo' ? `${AI_BADGE} (Gemini)` : 'Written by the decision engine',
+    logBadge: model?.aiDown ? TEMPLATE_BADGE : source === 'demo' ? `${AI_BADGE} (Gemini)` : ENGINE_BADGE,
   }
 }

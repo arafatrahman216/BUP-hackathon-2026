@@ -100,9 +100,9 @@ def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
                        urgent_depot_share: float = 0.5) -> list[str]:
     """Why a plan needs the operator. Empty list -> it may be auto-posted.
 
-    Only real trade-offs go to the operator. An urgent shipment is auto-posted, even when the tank is
-    already empty: waiting for a human would only add unserved demand. It needs the operator only when it
-    takes a large share of the depot's stock, which other stations may need.
+    An urgent shipment needs the operator while there is still time to review it (the tank lasts at least
+    the truck's trip), or when it takes a large share of the depot's stock, which other stations may need.
+    When the tank runs dry before the truck can arrive it is auto-posted: waiting would only add unserved demand.
     Rationing is approved at the policy level: shipments inside a station's fair-share budget
     stay automatic; only over-budget ones need the operator."""
     reasons = []
@@ -112,6 +112,10 @@ def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
         reasons.append("rationing: more than this station's fair share")
     route = world.routes[plan.route_id]
     if plan.risk == "urgent":
+        transit = int(route["transit_ticks"])
+        if plan.ticks_until_empty is not None and plan.ticks_until_empty >= transit:
+            reasons.append(f"urgent: {plan.ticks_until_empty:.1f} ticks of fuel left and the truck needs {transit}, "
+                           "so there is time to review")
         stock = float(world.depots[plan.depot_id]["inventory"].get(plan.fuel_type, 0))
         if stock > 0 and plan.quantity > urgent_depot_share * stock:
             reasons.append(f"urgent: takes {plan.quantity / stock:.0%} of {plan.depot_id}'s "
