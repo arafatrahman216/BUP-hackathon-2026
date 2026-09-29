@@ -1,4 +1,5 @@
-# Scrapes the backend's /api/v1/metrics every 5 s (docker-compose `prometheus` service).
+# Scrapes the backend's /api/v1/metrics every 5 s (docker-compose `prometheus` service), and the
+# load tester (backend/scripts/load_test.py, on the host at :9105) while it runs.
 global:
   scrape_interval: 5s
   evaluation_interval: 5s
@@ -8,3 +9,7 @@ scrape_configs:
     metrics_path: /api/v1/metrics
     static_configs:
       - targets: ["backend:8000"]
+
+  - job_name: loadtest
+    static_configs:
+      - targets: ["host.docker.internal:9105"]

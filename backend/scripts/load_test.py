@@ -8,6 +8,10 @@ and the backend container's CPU / memory (sampled with `docker stats`).
     backend/.venv/bin/python backend/scripts/load_test.py --quick    # 5 s steps
 
 Results: backend/scripts/load_results/<timestamp>.json and .md
+
+While it runs, the script serves Prometheus metrics on :9105 (`--metrics-port`, 0 = off): live client-side
+counters/latency plus one `loadtest_step_*` gauge set per finished step. Prometheus scrapes them (job
+`loadtest`) and Grafana shows them on the "Fuel Ops - Load Test" dashboard.
 """
 
 import argparse
@@ -21,6 +25,19 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, start_http_server
+
+REG = CollectorRegistry()
+REQS = Counter("loadtest_requests_total", "Requests sent by the load tester", ["scenario", "outcome"], registry=REG)
+LAT = Histogram("loadtest_request_duration_seconds", "Client-side latency", ["scenario"], registry=REG,
+                buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20))
+CLIENTS = Gauge("loadtest_active_clients", "Concurrent clients right now", ["scenario"], registry=REG)
+RUN = Gauge("loadtest_run_info", "1 while a load test runs", ["started"], registry=REG)
+STEP_FIELDS = {"throughput_rps": "req/s", "avg_ms": "ms", "p50_ms": "ms", "p95_ms": "ms", "p99_ms": "ms",
+               "max_ms": "ms", "error_rate": "fraction", "requests": "count", "cpu_avg_pct": "%",
+               "cpu_max_pct": "%", "mem_max_mib": "MiB"}
+STEP = {f: Gauge(f"loadtest_step_{f}", f"Result of a finished step ({u})", ["scenario", "concurrency"], registry=REG)
+        for f, u in STEP_FIELDS.items()}
 
 SCENARIOS = [
     # (name, method, path, concurrency levels, what it exercises)
@@ -74,7 +91,7 @@ class DockerSampler(threading.Thread):
                 "mem_max_mib": round(max(mems), 1)}
 
 
-async def step(client: httpx.AsyncClient, method: str, path: str, concurrency: int, duration: float,
+async def step(client: httpx.AsyncClient, name: str, method: str, path: str, concurrency: int, duration: float,
                container: str | None) -> dict:
     latencies: list[float] = []
     errors: dict[str, int] = {}
@@ -89,14 +106,19 @@ async def step(client: httpx.AsyncClient, method: str, path: str, concurrency: i
                 key = None if ok else str(res.status_code)
             except httpx.HTTPError as exc:
                 ok, key = False, type(exc).__name__
-            latencies.append((time.perf_counter() - started) * 1000)
+            seconds = time.perf_counter() - started
+            latencies.append(seconds * 1000)
+            LAT.labels(name).observe(seconds)
+            REQS.labels(name, "ok" if ok else "error").inc()
             if not ok:
                 errors[key] = errors.get(key, 0) + 1
 
     sampler = DockerSampler(container)
     sampler.start()
     started = time.perf_counter()
+    CLIENTS.labels(name).set(concurrency)
     await asyncio.gather(*(worker() for _ in range(concurrency)))
+    CLIENTS.labels(name).set(0)
     elapsed = time.perf_counter() - started
     resources = sampler.stop()
     ms = sorted(latencies)
@@ -132,10 +154,16 @@ async def main() -> None:
     ap.add_argument("--quick", action="store_true", help="5 s steps")
     ap.add_argument("--container", default="hackathontemplate-backend-1", help="'' to skip docker stats")
     ap.add_argument("--only", nargs="*", help="scenario names")
+    ap.add_argument("--metrics-port", type=int, default=9105, help="Prometheus metrics for Grafana; 0 = off")
+    ap.add_argument("--linger", type=float, default=20.0, help="seconds to keep serving metrics after the run")
     args = ap.parse_args()
     duration = 5.0 if args.quick else args.duration
     results = {"started": datetime.now().isoformat(timespec="seconds"), "base_url": args.base_url,
                "duration_s": duration, "scenarios": []}
+    if args.metrics_port:
+        start_http_server(args.metrics_port, registry=REG)
+        RUN.labels(results["started"]).set(1)
+        print(f"metrics on :{args.metrics_port}/metrics (Grafana: Fuel Ops - Load Test)")
     limits = httpx.Limits(max_connections=500, max_keepalive_connections=500)
     async with httpx.AsyncClient(base_url=args.base_url, timeout=60, limits=limits) as client:
         (await client.get("/api/v1/health")).raise_for_status()
@@ -144,8 +172,11 @@ async def main() -> None:
                 continue
             sc = {"name": name, "method": method, "path": path, "what": what, "steps": []}
             for c in levels:
-                r = await step(client, method, path, c, duration, args.container or None)
+                r = await step(client, name, method, path, c, duration, args.container or None)
                 sc["steps"].append(r)
+                for f in STEP_FIELDS:
+                    if r.get(f) is not None:
+                        STEP[f].labels(name, str(c)).set(r[f])
                 print(f"{name:16} c={c:<4} {r['throughput_rps']:>7} req/s  avg {r['avg_ms']:>7} p50 {r['p50_ms']:>7} "
                       f"p95 {r['p95_ms']:>7} p99 {r['p99_ms']:>7} ms  err {r['error_rate']:.2%}  "
                       f"cpu {r['cpu_avg_pct']}%  mem {r['mem_max_mib']} MiB", flush=True)
@@ -157,6 +188,10 @@ async def main() -> None:
     stem.with_suffix(".json").write_text(json.dumps(results, indent=2))
     stem.with_suffix(".md").write_text(markdown(results))
     print(f"\nwrote {stem}.json and {stem}.md")
+    if args.metrics_port:
+        RUN.labels(results["started"]).set(0)
+        print(f"serving final metrics for {args.linger:.0f} s so Prometheus scrapes them")
+        await asyncio.sleep(args.linger)
 
 
 if __name__ == "__main__":

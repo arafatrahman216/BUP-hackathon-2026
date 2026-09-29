@@ -72,4 +72,6 @@ p95 latency and error rate, as JSON and as Prometheus metrics with a Grafana das
   `controllers/status_controller.py`. Tests: `tests/test_status.py`.
 - Compose: `prometheus` (:9090), `grafana` (:3000, dashboard "Fuel Ops - System Status"). Config in `monitoring/`.
 - Load test: `backend/scripts/load_test.py`; results in `backend/scripts/load_results/`.
+- Grafana `Fuel Ops - Load Test` dashboard: live client-side view + per-scenario results (throughput and latency by
+  concurrency, table of every step). Filled by the load tester's own metrics (:9105, Prometheus job `loadtest`).
 

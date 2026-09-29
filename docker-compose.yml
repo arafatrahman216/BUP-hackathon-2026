@@ -68,6 +68,9 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      # the load tester (backend/scripts/load_test.py) serves its metrics on the host
+      - "host.docker.internal:host-gateway"
     depends_on:
       - backend
     restart: unless-stopped
