@@ -7,10 +7,13 @@ Every stage records ok / fallback / skipped / error and its duration in the
 pipeline state, which the dashboard shows. Fallbacks:
 - read fails      -> keep the last good world, mark it stale, don't act
 - validate fails  -> alert, don't act (decide + post skipped)
+- data stale      -> cautious mode: urgent needs only, shipments x STALE_QUANTITY_FACTOR,
+                     skip station/fuels we shipped to recently (STALE_DATA_MODE=stop: don't act)
 - save fails      -> log it and keep going (state stays in memory)
 - predict fails   -> reuse the last known demand rates
 - decide fails    -> fallback planner (rules); explain fails -> fallback template
 - post fails      -> recommendation stays APPROVED and is retried next tick
+- before posting  -> every plan is re-fitted to the current world (see pipeline.decide.recheck)
 """
 
 import asyncio
@@ -21,17 +24,17 @@ from typing import Any
 
 from app.core.config import Settings
 from app.models.recommendation import RecommendationStatus
-from app.pipeline.decide import Planner, importance_reasons
-from app.pipeline.detect import detect
+from app.pipeline.decide import Planner, floor_100, importance_reasons
+from app.pipeline.detect import detect, stockout_alerts
 from app.pipeline.explain import TemplateExplainer
 from app.pipeline.predict import LastKnownRatePredictor, Predictor
 from app.pipeline.state import PipelineState, StageResult
-from app.pipeline.types import Alert, World
+from app.pipeline.types import Alert, Blocked, World
 from app.pipeline.validate import validate_world
 from app.repositories.recommendation_repository import RecommendationRepository
 from app.repositories.simulator_repository import SimulatorRepository
 from app.repositories.snapshot_repository import SnapshotRepository
-from app.services.recommendation_service import RecommendationService
+from app.services.recommendation_service import RecommendationService, new_idempotency_key
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -111,10 +114,16 @@ class PipelineService:
 
         # 2. validate
         (issues, fatal), val = await stage("validate", lambda: _async(validate_world, world))
+        if world.stale and s.STALE_DATA_MODE == "stop":
+            fatal = True
         state.validation_issues = issues
         state.acting = not fatal
+        state.cautious = world.stale and not fatal
         if fatal:
             val.status, val.detail = "fallback", "invalid or stale data: not acting this tick"
+        elif state.cautious:
+            val.status, val.detail = "fallback", (f"stale data: cautious mode (urgent only, shipments "
+                                                  f"x{s.STALE_QUANTITY_FACTOR:g})")
 
         # 3. save
         if s.SNAPSHOT_EVERY_TICKS > 0 and (state.runs % s.SNAPSHOT_EVERY_TICKS == 0):
@@ -137,11 +146,7 @@ class PipelineService:
             pred.status = "fallback"
         state.forecasts = forecasts
         state.rates.update({k: f.rate_per_tick for k, f in forecasts.items() if f.rate_per_tick is not None})
-        for f in forecasts.values():
-            if f.risk == "urgent":
-                alerts.append(Alert("critical", "STOCKOUT_RISK",
-                                    f"{f.station_id} {f.fuel_type} covers {f.cover_ticks:.1f} ticks, "
-                                    f"lead time {f.lead_ticks} ticks", f.station_id))
+        alerts += stockout_alerts(forecasts)
         state.alerts = alerts
 
         # 6-7. decide + explain, then post. Only this part shares the lock with operator actions.
@@ -158,10 +163,11 @@ class PipelineService:
                 skip("decide", "explain", "post", why="data stale or invalid")
             else:
                 open_recs = await self._expire_open(open_recs, tick)
-                plans, dec = await stage("decide", lambda: _async(self._decide, world, forecasts, open_recs))
+                shipped = await self._recently_shipped(world) if state.cautious else set()
+                plans, dec = await stage("decide", lambda: _async(self._decide, world, forecasts, open_recs, shipped))
                 if dec.status == "error":
                     try:
-                        plans = self._decide(world, forecasts, open_recs, fallback=True)
+                        plans = self._decide(world, forecasts, open_recs, shipped, fallback=True)
                         dec.status = "fallback"
                     except Exception:
                         logger.exception("Fallback planner failed too")
@@ -182,24 +188,7 @@ class PipelineService:
 
     # ---------- stages ----------
     async def _read(self) -> World:
-        names = ("instance", "depots", "stations", "routes", "supply_arrivals", "events", "allocations", "metrics")
-        responses = await asyncio.gather(*(getattr(self.sim, n)() for n in names))
-        by_name = dict(zip(names, responses))
-        stations = by_name["stations"].data
-        fuels = {f for st in stations for f in st.get("capacity", {})} or {"x"}
-        history = await self.sim.demand_history(limit=len(stations) * len(fuels) * self.settings.FORECAST_WINDOW_TICKS)
-        return World(
-            instance=by_name["instance"].data,
-            depots={d["id"]: d for d in by_name["depots"].data},
-            stations={st["id"]: st for st in stations},
-            routes={r["id"]: r for r in by_name["routes"].data},
-            supply=by_name["supply_arrivals"].data,
-            events=by_name["events"].data,
-            allocations=by_name["allocations"].data,
-            history=history.data,
-            metrics=by_name["metrics"].data,
-            stale=any(r.stale for r in (*responses, history)),
-        )
+        return await read_world(self.sim, self.settings)
 
     async def _save(self, world: World, valid: bool) -> None:
         pick = lambda d, keys: {k: d.get(k) for k in keys}  # noqa: E731
@@ -214,14 +203,41 @@ class PipelineService:
             },
         })
 
-    def _decide(self, world: World, forecasts: dict, open_recs: list, fallback: bool = False) -> list:
+    def _decide(self, world: World, forecasts: dict, open_recs: list, shipped: set | None = None,
+                fallback: bool = False) -> list:
         planner = self.fallback_planner if fallback else self.planner
         skip = {(r.station_id, r.fuel_type) for r in open_recs}
+        if self.state.cautious:  # stale data: only what would run dry, nothing we just shipped to
+            forecasts = {k: f for k, f in forecasts.items() if f.risk == "urgent"}
+            skip |= shipped or set()
         plans, blocked = planner.plan(world, forecasts, skip)
+        if self.state.cautious:
+            plans, blocked = self._shrink_for_stale(plans, blocked)
         for plan in plans:
             plan.reasons = importance_reasons(plan, world, self.settings.AUTO_POST_ENABLED)
         self.state.blocked = blocked
         return plans
+
+    def _shrink_for_stale(self, plans: list, blocked: list) -> tuple[list, list]:
+        """Stale data may overstate the free tank space, and overflow on arrival is lost."""
+        kept = []
+        for plan in plans:
+            plan.quantity = floor_100(plan.quantity * self.settings.STALE_QUANTITY_FACTOR)
+            if plan.quantity >= self.settings.MIN_SHIPMENT_LITERS:
+                kept.append(plan)
+            else:
+                blocked.append(Blocked(plan.station_id, plan.fuel_type, "stale data: reduced shipment is below the minimum"))
+        return kept, blocked
+
+    async def _recently_shipped(self, world: World) -> set[tuple[str, str]]:
+        """Station/fuels we posted to within one trip: stale data may not show those shipments yet."""
+        window = max((int(r["transit_ticks"]) for r in world.routes.values()), default=0) + 1
+        try:
+            posted = await self.recs.posted_between(world.tick - window, world.tick)
+        except Exception:  # planning goes on; the halved quantities bound any double shipment
+            logger.exception("Could not load recent shipments")
+            return set()
+        return {(r.station_id, r.fuel_type) for r in posted}
 
     async def _explain_and_store(self, world: World, forecasts: dict, plans: list) -> list:
         rows = []
@@ -239,6 +255,7 @@ class PipelineService:
                 "proposed_quantity": plan.quantity, "risk": plan.risk, "ticks_until_empty": plan.ticks_until_empty,
                 "important": important, "decision_mode": "operator" if important else "auto",
                 "reasons": plan.reasons, "explanation": explanation, "planner": plan.planner,
+                "idempotency_key": new_idempotency_key(plan.station_id, plan.fuel_type, plan.quantity),
                 "status": RecommendationStatus.PENDING_APPROVAL if important else RecommendationStatus.APPROVED,
             })
         if not rows:
@@ -293,6 +310,29 @@ class PipelineService:
         state.last_run = {"tick": tick, "at": time.time(), "duration_ms": round((time.perf_counter() - started) * 1000, 1)}
         state.publish()
         return {"ran": True, "tick": tick, "detail": None}
+
+
+async def read_world(sim: SimulatorRepository, settings: Settings) -> World:
+    """The read stage: every /v1 GET in parallel + demand history for the forecast window.
+    Also used by the explain flow when the pipeline has no cached world yet."""
+    names = ("instance", "depots", "stations", "routes", "supply_arrivals", "events", "allocations", "metrics")
+    responses = await asyncio.gather(*(getattr(sim, n)() for n in names))
+    by_name = dict(zip(names, responses))
+    stations = by_name["stations"].data
+    fuels = {f for st in stations for f in st.get("capacity", {})} or {"x"}
+    history = await sim.demand_history(limit=len(stations) * len(fuels) * settings.FORECAST_WINDOW_TICKS)
+    return World(
+        instance=by_name["instance"].data,
+        depots={d["id"]: d for d in by_name["depots"].data},
+        stations={st["id"]: st for st in stations},
+        routes={r["id"]: r for r in by_name["routes"].data},
+        supply=by_name["supply_arrivals"].data,
+        events=by_name["events"].data,
+        allocations=by_name["allocations"].data,
+        history=history.data,
+        metrics=by_name["metrics"].data,
+        stale=any(r.stale for r in (*responses, history)),
+    )
 
 
 async def _async(fn: Callable, *args: Any) -> Any:

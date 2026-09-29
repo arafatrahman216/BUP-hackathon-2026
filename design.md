@@ -30,14 +30,15 @@ Feature requirements live in [features.md](features.md).
 ├── simulator/            simulator compose file + dataset collector
 ├── slide/                presentation material
 ├── docker-compose.yml    runs the backend
+├── explainability.md     decisions behind the AI explanations (Ask AI)
 ├── design.md             this file
 ├── features.md           feature list the agent builds from
 └── CLAUDE.md             entry point for Claude Code (points here)
 ```
 
 The backend owns all simulator access; the browser only talks to the backend.
-Routes: `GET /health`, the `/ai` endpoints, the pipeline/dashboard endpoints and
-`/recommendations` (see §7a).
+Routes: `GET /health`, the `/ai` endpoints, the pipeline/dashboard endpoints,
+`/recommendations` (see §7a) and `/explain` (see §7b).
 
 ## 3. Backend
 
@@ -50,14 +51,15 @@ Routes: `GET /health`, the `/ai` endpoints, the pipeline/dashboard endpoints and
 | `core/database.py` | Async engine, `SessionLocal`, `get_db` dependency, `init_db()` (`create_all`). | |
 | `core/exceptions.py` | `AppException` and its subclasses (`BadRequestError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `ExternalServiceError`, `ServiceUnavailableError`). | Services raise these; never return error dicts by hand. |
 | `core/dependencies.py` | Wiring: `get_<x>_service` builds a service with its repositories and clients. Annotated types `DbSession`, `LLM` (AI client), `Storage` (Supabase Storage). | One `get_<feature>_service` per feature. |
-| `controllers/` | FastAPI routers (HTTP layer only). Now: `health_controller.py`, `ai_controller.py`, `pipeline_controller.py` (dashboard, SSE stream, manual run, snapshots), `recommendation_controller.py` (list, approve/edit, reject). `__init__.py` registers every router into `api_router`. | Parse input, call one service method, return. No business logic, no DB access. |
-| `services/` | Business logic. Now: `ai_service.py`, `pipeline_service.py` (one pipeline pass per tick), `recommendation_service.py` (approval + posting), `dashboard_service.py` (cached state + SSE). One `<name>_service.py` with a `<Name>Service` class per feature. | No FastAPI imports (except `UploadFile`); raise `AppException`s. |
-| `repositories/` | Data access. Now: `storage_repository.py` (Supabase Storage), `simulator_repository.py` (simulator `/v1` client: timeout, retry + backoff, circuit breaker, stale-header detection, both error shapes), `snapshot_repository.py`, `recommendation_repository.py`. One `<name>_repository.py` per table. | The only layer that touches the DB session, the storage API or the simulator. |
-| `models/` | SQLAlchemy ORM: `base.py` has `Base` and `TimestampMixin` (`created_at`, `updated_at`). | Import every new model in `models/__init__.py`, or its table won't be created. |
-| `schemas/` | Pydantic request/response models. Now: `common.py` (`ErrorResponse`, generic `Page[T]`) and `ai.py`. Per resource: `<Name>Create`, `<Name>Update`, `<Name>Read`. | Always set a `response_model`; never return ORM objects raw. |
+| `controllers/` | FastAPI routers (HTTP layer only). Now: `health_controller.py`, `ai_controller.py`, `pipeline_controller.py` (dashboard, SSE stream, manual run, snapshots), `recommendation_controller.py` (list, approve/edit, reject), `explain_controller.py` (catalog, context preview, free question, Ask AI per recommendation). `__init__.py` registers every router into `api_router`. | Parse input, call one service method, return. No business logic, no DB access. |
+| `services/` | Business logic. Now: `ai_service.py`, `pipeline_service.py` (one pipeline pass per tick), `recommendation_service.py` (approval + posting), `dashboard_service.py` (cached state + SSE), `explain_service.py` (pipeline snapshot → metrics → LLM → stored Q&A). One `<name>_service.py` with a `<Name>Service` class per feature. | No FastAPI imports (except `UploadFile`); raise `AppException`s. |
+| `repositories/` | Data access. Now: `storage_repository.py` (Supabase Storage), `simulator_repository.py` (simulator `/v1` client: timeout, retry + backoff, circuit breaker, stale-header detection, both error shapes), `snapshot_repository.py`, `recommendation_repository.py`, `action_question_repository.py`. One `<name>_repository.py` per table. | The only layer that touches the DB session, the storage API or the simulator. |
+| `models/` | SQLAlchemy ORM: `base.py` has `Base` and `TimestampMixin` (`created_at`, `updated_at`); `snapshot.py`, `recommendation.py`, `action_question.py` (Q&A per recommendation). | Import every new model in `models/__init__.py`, or its table won't be created. |
+| `schemas/` | Pydantic request/response models. Now: `common.py` (`ErrorResponse`, generic `Page[T]`), `ai.py`, `pipeline.py`, `recommendation.py`, `explain.py`. Per resource: `<Name>Create`, `<Name>Update`, `<Name>Read`. | Always set a `response_model`; never return ORM objects raw. |
 | `middlewares/` | `cors.py`, `request_logging.py`, `error_handler.py`, `rate_limiter.py`, and `setup_middlewares()` in `__init__.py`. | See §3.3. |
 | `utils/` | `logger.py` (logging with request ids), `pagination.py` (`page_params` dependency + `build_page` → `Page[T]`). | Framework-agnostic helpers. |
 | `ai/` | Provider-agnostic LLM module (see §4). | |
+| `explainability/` | LLM explanations (see §7b): `types.py` (`Subject`, `Snapshot`, `MetricContext`), `metrics.py` (`@metric` registry + built-in metrics over the pipeline's World/Forecast/Alert), `profiles.json` (**which metrics each question type sends to the LLM, params, suggested questions**), `context.py` (load profiles, build the JSON context), `prompt.py` (system prompt + messages). | Metrics are pure (no I/O) and never recompute detect/predict; `ExplainService` does the I/O. |
 | `pipeline/` | Tick pipeline stages (see §7a): `types.py` (World, Forecast, Plan, Alert), `validate.py`, `detect.py`, `predict.py`, `decide.py`, `explain.py`, `state.py` (in-memory cache + SSE broadcaster), `watcher.py` (SSE listener + polling fallback), `__init__.py` (stage builders: **swap in a model here**). | Stages are pure (no I/O); `PipelineService` does the I/O. |
 
 `backend/tests/`: pytest suite with fake AI providers, a mocked Supabase Storage API, and
@@ -236,7 +238,10 @@ read → validate → save → detect → predict → decide → explain
   A tick going backwards is a **reset**: open recommendations are expired and state resyncs.
 - **Stages (baseline = hard-coded rules, no model):**
   - *read*: all `/v1` GETs in parallel + `demand-history` (limit = stations × fuels × window).
-  - *validate*: inventories ≥ 0 and ≤ capacity, routes reference known depots/stations, stale header. Fatal → don't act.
+  - *validate*: inventories ≥ 0 and ≤ capacity, routes reference known depots/stations. Fatal → don't act.
+    Stale header (`X-Simulator-Stale`) → **cautious mode** (`STALE_DATA_MODE=cautious`): plan `urgent` needs only,
+    shipments × `STALE_QUANTITY_FACTOR` (floored to 100 L), skip station/fuels we posted to within one trip
+    (max transit + 1), and every plan carries a "stale" reason (→ operator). `STALE_DATA_MODE=stop` → don't act.
   - *save*: compact `tick_snapshots` row every `SNAPSHOT_EVERY_TICKS`.
   - *detect*: alerts for outages, disrupted routes, constrained depots, active/scheduled crises, delayed ships, failed shipments, unmet demand.
   - *predict*: rate = mean demand of the last `FORECAST_WINDOW_TICKS`; cover = (inventory + incoming) / rate;
@@ -247,26 +252,64 @@ read → validate → save → detect → predict → decide → explain
   - *important?* urgent risk, backup route, depot not OPEN, an ACTIVE crisis touching the station/region/depot/route,
     or `AUTO_POST_ENABLED=false` → `PENDING_APPROVAL`; otherwise `APPROVED` (auto).
   - *explain*: template text.
-  - *post*: `POST /v1/allocations` with key `bup-rec-{id}-{station}-{fuel}-{qty}` (retry-safe; an edit gets a new key).
+  - *re-check* (right before every post, `pipeline.decide.recheck`): the plan is re-fitted to the current world with
+    the planner's limits (free space after incoming, route max, depot stock − reserve, dispatch left). Auto plans and
+    unedited approvals may grow or shrink; operator-edited quantities and stale data only shrink. A resize is appended
+    to the explanation. Station closed / route cut / no room / no stock → `REFUSED` with the simulator's code, not sent;
+    dispatch limit used up → stays `APPROVED`, retried next tick. After a post, the allocation is added to the cached
+    world (and depot stock deducted) so later re-checks in the same tick see it.
+  - *post*: `POST /v1/allocations` with key `bup-{token}-{station}-{fuel}-{qty}`. The random token is stored on the
+    recommendation when it is created (never derived from the DB id); a new quantity keeps the token with a new
+    suffix. Before posting, an allocation in `/v1/allocations` carrying the stored key (an earlier attempt whose answer
+    was lost) marks the recommendation `POSTED` instead of sending again.
 - **Fallbacks:** read fails → cached world marked stale, no action; invalid/stale data → no action; save fails → continue;
   predict fails → last known rates; decide fails → fallback planner; explain fails → template;
-  post transient failure → stays `APPROVED`, retried next tick; post 4xx → `REFUSED` + simulator code.
+  post transient failure → stays `APPROVED`, retried next tick; `DISPATCH_CAPACITY_EXCEEDED` → retried next tick;
+  other post 4xx → `REFUSED` + simulator code; stale data → cautious mode.
 - **Recommendation lifecycle:** `PENDING_APPROVAL → APPROVED → POSTED | REFUSED`, or `REJECTED`, or `EXPIRED`
   (older than `APPROVAL_TTL_TICKS` **and** `APPROVAL_MIN_SECONDS`, or a simulator reset).
 - **Locks:** `state.run_lock` serializes runs; `state.lock` covers decide → post and operator approve/reject.
 - **Endpoints:** `GET /dashboard`, `GET /stream` (SSE `state` events + `depot` hints), `POST /pipeline/run`,
   `GET /snapshots`, `GET /recommendations`, `GET /recommendations/{id}`, `POST /recommendations/{id}/approve`
   (`{quantity?, note?}`), `POST /recommendations/{id}/reject`.
-- **Not built yet:** refusal handling beyond recording it, shipment tracking/replacement, cancel, operator auth, LLM explanations.
+- **Not built yet:** shipment tracking/replacement (FAILED allocations), cancel, operator auth. (LLM explanations: §7b; the explain stage still writes template text.)
+
+## 7b. Explainability (`/explain`, "Ask AI")
+
+Full rationale: [explainability.md](explainability.md).
+
+```
+Ask AI (approval card / decision-log row) → POST /explain/recommendations/{id} {question}
+  → profile "recommendation" (profiles.json) → metric list
+  → snapshot = pipeline cache (World + predict Forecasts + detect Alerts + blocked)
+               | no cache yet → read_world() + build_predictor().predict() + detect() + stockout_alerts()
+  + open recommendations (DB) + longer demand history for the station (simulator, optional)
+  → each metric → one JSON block → {"_meta": {subject, stale_data, data_source, notes}, <metric>: ..., "_unavailable"}
+  → system prompt + profile instructions + question + JSON → LLMClient (Gemini 3.8 Flash first) → answer
+  → stored in `action_questions` (question, answer, model, tick, the exact context)
+```
+
+- **Same numbers as the pipeline:** `forecast`, `alerts`, `station_ranking`, `risk_rules` expose predict/detect output and
+  the settings the pipeline decided with; metrics never re-implement them. Swapping the predictor in `app/pipeline/__init__.py`
+  changes explanations too.
+- **Change what the LLM sees:** edit `app/explainability/profiles.json` (metrics per profile, `params`, `suggested_questions`
+  per recommendation status), or per request with `metrics` / `params`. Read on every request (no restart).
+- **Add a metric:** `@metric("name")` in `metrics.py`, taking a `MetricContext`; return JSON or `None` (not applicable).
+- **Degraded inputs** are stated in `_meta.notes` (live read, old action, missing long history, DB down); a raising metric is listed
+  in `errors`/`_unavailable`. No cache and no simulator → 503 `SIMULATOR_UNAVAILABLE`. LLM errors use the AI codes (§3.3); nothing is stored then.
+- **LLM:** `EXPLAIN_PROVIDER` empty → the `AI_PROVIDER_ORDER` chain (Gemini first, with fallback). `GEMINI_MODEL=gemini-3.8-flash`.
+- **Endpoints:** `GET /explain/recommendations/{id}` (suggestions for its status + earlier Q&A), `POST /explain/recommendations/{id}`
+  (`{question}` → stored Q&A), `POST /explain` (any question, not stored), `POST /explain/context` (the JSON only, no LLM),
+  `GET /explain/profiles`. POSTs are rate limited (`/api/v1/explain` in `RATE_LIMIT_PATH_PREFIXES`).
 
 ## 8. Frontend (`frontend/src/`)
 
 | Path | What it holds |
 |---|---|
-| `api/api.js` | The only HTTP module: `dashboardApi` (get, run, streamUrl), `recommendationsApi` (approve, reject) |
+| `api/api.js` | The only HTTP module: `dashboardApi` (get, run, streamUrl), `recommendationsApi` (approve, reject), `explainApi` (questions, ask) |
 | `hooks/useDashboard.js` | Live state: EventSource on `/stream`; polls `/dashboard` every 2 s while SSE is down |
 | `pages/Dashboard/` | Operator page: status bar, score, pipeline stages, stations, approvals, alerts, depots, routes, trucks, ships/crises, decision log |
-| `components/dashboard/` | `StationCard`/`FuelGauge`, `DepotCard`, `PipelineStrip`, `ApprovalCard`, tables, `StatusBadge` |
+| `components/dashboard/` | `StationCard`/`FuelGauge`, `DepotCard`, `PipelineStrip`, `ApprovalCard`, `AskPanel` (Ask AI: suggestions, question, stored answers, data used), tables, `StatusBadge` |
 | `utils/format.js` | Formatting + risk/status meta (icon + label + color; color never alone) |
 
 ## 7. Decision log
@@ -296,7 +339,16 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | Integration | Simulator client is a repository with timeout, retries + backoff, circuit breaker, stale-header flag | Only the repository layer does external I/O |
 | 2026-09-29 | Data | Tables `tick_snapshots` (compact JSON per tick) and `recommendations` (proposal + operator action + post result) | Audit/charts + decision log; one row per recommendation |
 | 2026-09-29 | Data | Pipeline writes are batched (flush + one commit per stage) | Supabase round-trips are ~100 ms; per-row commits made runs take seconds |
-| 2026-09-29 | Pipeline | Idempotency key `bup-rec-{id}-{station}-{fuel}-{qty}` | Retries are safe; an operator edit changes the body, so it needs a new key |
+| 2026-09-29 | Pipeline | ~~Idempotency key `bup-rec-{id}-{station}-{fuel}-{qty}`~~ (superseded below) | Retries are safe; an operator edit changes the body, so it needs a new key |
 | 2026-09-29 | Pipeline | Recommendations expire only when older than `APPROVAL_TTL_TICKS` **and** `APPROVAL_MIN_SECONDS` | At speed 8 a tick TTL alone expires them before a human can read them |
 | 2026-09-29 | Frontend | Backend re-publishes its own SSE (`/stream`, full state per run); browser polls `/dashboard` as fallback | User decision; the browser never calls the simulator |
 | 2026-09-29 | DevOps | Backend on host port 8001; `SIMULATOR_BASE_URL` defaults to `http://host.docker.internal:8000` in compose | Simulator owns :8000 |
+| 2026-09-29 | Pipeline | Every post re-fits the plan to the current world first (supersedes posting approved plans as-is); dispatch-limit refusals wait a tick instead of `REFUSED` | Approvals can be hundreds of ticks old at speed 8; overflow on arrival is silently lost; the guide says the dispatch limit frees up next tick |
+| 2026-09-29 | Pipeline | Idempotency key `bup-{random token}-{station}-{fuel}-{qty}`, token stored at creation; lost answers reconciled by key via `/v1/allocations` (supersedes `bup-rec-{id}-…`) | DB-id keys repeat after a DB reset while the simulator keeps its allocations (same body → silent no-op, different body → mismatch) |
+| 2026-09-29 | Pipeline | Stale data → cautious mode (urgent only, ×0.5 shipments, skip recent destinations) instead of stopping; `STALE_DATA_MODE=stop` restores the old behaviour | A stale fault can last an hour; the simulator still validates every post against live state |
+| 2026-09-29 | AI | Explainability is a standalone module (`app/explainability/`): pluggable `@metric` functions declare the simulator sources they need; `profiles.json` maps question types to metric lists; the service fetches only those sources and sends one JSON context to the LLM | User requirement: metrics and how they are computed must be easy to change later without touching the I/O or prompt code |
+| 2026-09-29 | AI | Explanations read the simulator live instead of the pipeline cache; partial failures are reported in the context (`_unavailable`) rather than failing the request | Keeps the module independent of the pipeline; the LLM is told what data is missing |
+| 2026-09-29 | AI | Explanations use the pipeline's cached World + Forecasts + Alerts (live read through the same `read_world`/predict/detect code when there is no cache) instead of their own simulator reads and calculations (supersedes "read the simulator live") | User requirement: detection and prediction already exist; answers must match what the system decided with |
+| 2026-09-29 | AI | "Ask AI" per recommendation in the approval queue and decision log; every Q&A is stored in `action_questions` with the exact context sent | Audit trail of what the operator was told and why; reload shows earlier answers |
+| 2026-09-29 | AI | Default Gemini model `gemini-3.8-flash` | Best accuracy and latency of 2.5 Flash / 3.8 Flash / 3.1 Pro on six operator questions; not a preview |
+| 2026-09-29 | AI | Suggested questions per recommendation status live in `profiles.json` | Tunable without code, next to the metrics they rely on |

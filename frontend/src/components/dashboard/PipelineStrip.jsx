@@ -23,7 +23,8 @@ export function PipelineStrip({ pipeline }) {
         )
       })}
       <div className={styles.stageSummary}>
-        {pipeline.acting ? 'acting on live data' : 'NOT acting (stale / invalid data)'} · run #{pipeline.runs}
+        {!pipeline.acting ? 'NOT acting (invalid / stale data)'
+          : pipeline.cautious ? 'CAUTIOUS: stale data, urgent needs only, smaller shipments' : 'acting on live data'} · run #{pipeline.runs}
         {pipeline.last_run?.duration_ms ? ` · ${Math.round(pipeline.last_run.duration_ms)} ms` : ''}
       </div>
     </div>

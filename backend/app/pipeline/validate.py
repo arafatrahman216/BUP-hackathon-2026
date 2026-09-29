@@ -1,5 +1,7 @@
 """Validate stage: sanity checks on what the simulator returned. A fatal issue means
-"don't act on this data" (the pipeline still shows it, marked invalid)."""
+"don't act on this data" (the pipeline still shows it, marked invalid). The stale flag
+is reported but not fatal here: PipelineService picks cautious mode or stop
+(STALE_DATA_MODE)."""
 
 from app.pipeline.types import World
 
@@ -35,5 +37,4 @@ def validate_world(world: World) -> tuple[list[str], bool]:
 
     if world.stale:
         issues.append("Simulator flagged the data as stale (X-Simulator-Stale)")
-        fatal = True
     return issues, fatal

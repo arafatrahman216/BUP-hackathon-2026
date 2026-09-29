@@ -67,7 +67,10 @@ export default function DashboardPage() {
         <div className={styles.banner} role="status">
           <StatusBadge meta={LEVEL.warning} label="STALE" />
           Showing cached data{sim.data_age_seconds != null ? ` from ${Math.round(sim.data_age_seconds)} s ago` : ''}.
-          {' '}{sim.error || 'The simulator flagged its data as stale.'} No shipments are posted until fresh data arrives.
+          {' '}{sim.error || 'The simulator flagged its data as stale.'}
+          {pipeline.cautious
+            ? ' Cautious mode: only urgent needs are planned, with smaller shipments.'
+            : ' No shipments are posted until fresh data arrives.'}
         </div>
       )}
 

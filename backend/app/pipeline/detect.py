@@ -1,6 +1,6 @@
 """Detect stage (rules): turn the current world into operator alerts."""
 
-from app.pipeline.types import Alert, World
+from app.pipeline.types import Alert, Forecast, World
 
 
 def detect(world: World) -> list[Alert]:
@@ -34,3 +34,12 @@ def detect(world: World) -> list[Alert]:
     if unmet > 0:
         alerts.append(Alert("warning", "UNMET_DEMAND", f"{unmet:,.0f} L of demand went unserved at tick {last_tick}"))
     return alerts
+
+
+def stockout_alerts(forecasts: dict[tuple[str, str], Forecast]) -> list[Alert]:
+    """Predict-stage alerts: station/fuels whose cover is below lead time + urgent margin."""
+    return [
+        Alert("critical", "STOCKOUT_RISK", f"{f.station_id} {f.fuel_type} covers {f.cover_ticks:.1f} ticks, "
+              f"lead time {f.lead_ticks} ticks", f.station_id)
+        for f in forecasts.values() if f.risk == "urgent"
+    ]

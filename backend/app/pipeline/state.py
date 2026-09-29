@@ -32,7 +32,8 @@ class PipelineState:
     alerts: list[Alert] = field(default_factory=list)
     blocked: list[Blocked] = field(default_factory=list)
     validation_issues: list[str] = field(default_factory=list)
-    acting: bool = False  # false -> data stale/invalid, decide + post were skipped
+    acting: bool = False  # false -> data invalid (or stale with STALE_DATA_MODE=stop): decide + post skipped
+    cautious: bool = False  # data flagged stale: urgent needs only, smaller shipments
     stages: list[StageResult] = field(default_factory=list)
     last_run: dict[str, Any] = field(default_factory=dict)
     runs: int = 0
@@ -76,7 +77,7 @@ class PipelineState:
                 "status": w.instance.get("status") if w else None, "tick_minutes": w.tick_minutes if w else None,
             },
             "pipeline": {
-                "acting": self.acting, "runs": self.runs, "last_run": self.last_run,
+                "acting": self.acting, "cautious": self.cautious, "runs": self.runs, "last_run": self.last_run,
                 "stages": [s.__dict__ for s in self.stages], "validation_issues": self.validation_issues,
             },
             "alerts": [a.to_dict() for a in self.alerts],

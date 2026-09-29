@@ -13,12 +13,14 @@ from app.ai import LLMClient, get_llm_client
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.pipeline.state import PipelineState, get_pipeline_state
+from app.repositories.action_question_repository import ActionQuestionRepository
 from app.repositories.recommendation_repository import RecommendationRepository
 from app.repositories.simulator_repository import SimulatorRepository, get_simulator_repository
 from app.repositories.snapshot_repository import SnapshotRepository
 from app.repositories.storage_repository import StorageRepository, get_storage_repository
 from app.services.ai_service import AIService
 from app.services.dashboard_service import DashboardService
+from app.services.explain_service import ExplainService
 from app.services.pipeline_service import PipelineService
 from app.services.recommendation_service import RecommendationService
 
@@ -61,3 +63,9 @@ def get_dashboard_service(session: DbSession, state: State) -> DashboardService:
 def get_stream_service(state: State) -> DashboardService:
     """No DB session: an SSE connection stays open for a long time."""
     return DashboardService(state)
+
+
+def get_explain_service(session: DbSession, sim: Simulator, state: State, llm: LLM) -> ExplainService:
+    settings = get_settings()
+    return ExplainService(sim, RecommendationRepository(session), ActionQuestionRepository(session), state, llm,
+                          pipeline.build_predictor(settings), settings)
