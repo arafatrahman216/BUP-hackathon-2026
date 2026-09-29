@@ -83,11 +83,12 @@ class Settings(BaseSettings):
 
     # --- Simulator client ---
     SIMULATOR_BASE_URL: str = "http://localhost:8000"
-    SIMULATOR_TIMEOUT_SECONDS: float = 5.0
-    SIMULATOR_RETRIES: int = 2  # extra attempts on network errors / 5xx
+    SIMULATOR_TIMEOUT_SECONDS: float = 10.0  # above the simulator latency fault (5 s) so slow reads still succeed
+    SIMULATOR_RETRIES: int = 2  # extra attempts on connection errors / 5xx (timeouts are not retried)
     SIMULATOR_BACKOFF_SECONDS: float = 0.2  # doubles each retry
     SIMULATOR_BREAKER_THRESHOLD: int = 5  # consecutive failures that open the circuit
     SIMULATOR_BREAKER_COOLDOWN_SECONDS: float = 5.0
+    SIMULATOR_STREAM_IDLE_SECONDS: float = 30.0  # SSE silent this long -> reconnect (polling covers the gap)
 
     # --- Pipeline (tick loop) ---
     PIPELINE_ENABLED: bool = True  # false -> no background tick watcher (tests)

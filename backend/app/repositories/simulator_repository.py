@@ -1,7 +1,8 @@
 """HTTP client for the BUP Fuel Supply Simulator (`/v1/*` only, never `/admin`).
 
 Resilience built in:
-- timeout on every call, retries with exponential backoff on network errors and 5xx,
+- timeout on every call, retries with exponential backoff on connection errors and 5xx (not timeouts),
+- an idle timeout on the SSE stream, so a silent (half-open) stream is dropped and reconnected,
 - a circuit breaker (open after N consecutive failures, half-open after a cooldown),
 - `X-Simulator-Stale: true` detection (exposed as `SimResponse.stale`),
 - both simulator error shapes: `{"detail": {"code", "message"}}` and `{"error": {"code", ...}}`.
@@ -109,6 +110,10 @@ class SimulatorRepository:
             started = time.perf_counter()
             try:
                 response = await self.http.request(method, path, **kwargs)
+            except httpx.TimeoutException as exc:
+                # a slow simulator (latency fault) would just time out again: fail now, the next tick retries
+                last_exc = SimulatorError(f"{method} {path}: {type(exc).__name__} {exc}")
+                break
             except httpx.HTTPError as exc:
                 last_exc = SimulatorError(f"{method} {path}: {type(exc).__name__} {exc}")
             else:
@@ -172,7 +177,8 @@ class SimulatorRepository:
 
     def stream(self) -> Any:
         """Opens `/v1/stream` (SSE). Use as `async with repo.stream() as response:`."""
-        return self.http.stream("GET", "/v1/stream", timeout=httpx.Timeout(None, connect=self.settings.SIMULATOR_TIMEOUT_SECONDS))
+        return self.http.stream("GET", "/v1/stream", timeout=httpx.Timeout(self.settings.SIMULATOR_STREAM_IDLE_SECONDS,
+                                                                     connect=self.settings.SIMULATOR_TIMEOUT_SECONDS))
 
     async def aclose(self) -> None:
         await self.http.aclose()
