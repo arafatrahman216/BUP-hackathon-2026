@@ -152,6 +152,13 @@ A good forecast is the pattern learned from history × the current multiplier.
   (this depot's pending plus in-flight this tick + qty > dispatch limit) → `DESTINATION_CAPACITY_EXCEEDED`
   (station inventory + qty > capacity). All of these are 409 except the 404. Bad enums or a quantity ≤ 0 give 422.
 - `POST /v1/allocations/{id}/cancel` works only while the allocation is `PENDING` and refunds the depot. Otherwise it returns `409 CANNOT_CANCEL`.
+- **Verified rules (tests on 2026-09-29):**
+  - The destination-capacity check ignores in-transit fuel. If a truck arrives to a tank that's too full, the extra is **silently lost**
+    (the status is still `ARRIVED` and the depot is still debited; the audit log shows `received` < quantity).
+  - Multiple allocations on the same route in the same tick are allowed.
+  - Supply arriving at a full depot is capped at capacity, and the excess is lost.
+  - `DISPATCH_CAPACITY_EXCEEDED` counts only allocations created **this tick**; the limit resets every tick.
+  - An allocation created at tick T departs at T and arrives at T + `transit_ticks`.
 - **Post only when needed**, not on every tick. Decide on every tick; post when
   ticks-until-empty < transit + safety margin. Don't post too early, or the tank won't have room. If
   several stations need fuel at once, spread shipments across ticks (dispatch limit) and serve the most urgent first.
@@ -279,3 +286,25 @@ Core (priority): **1, 2, 4, 5, 7, 10, 13, 14, 16**.
 - `SIMULATION_SPEED=8` is too fast for a demo. Pick a demo speed (about 1).
 - Exact judge scoring of decisions is unspecified. We assume `service_level` is the key number.
 - `features.md` is still empty. Populate it from §8 in the template format.
+
+---
+
+## 10. Decisions and clarifications (from discussion with the human)
+
+- **Intelligence (brief §7) is a menu, not a checklist.** Only one meaningful capability is
+  required. We deliberately pick **one per category, chained together**, and skip the rest
+  (no transport-delay prediction, no bottleneck detection, no reinforcement learning):
+  | Category | Our pick |
+  |---|---|
+  | Prediction | Demand forecast → hours until empty (feature 4 + 5) |
+  | Detection | Unusual demand: actual demand far above forecast, plus event and status changes (feature 6) |
+  | Decision | Priority-based constrained shipment planner with a rule-based fallback (feature 7) |
+  | Generative AI | Explanation of each recommendation and crisis (feature 9). **Not a standalone chatbot**; the brief explicitly says a chatbot isn't enough |
+  Rationale: the brief says "complexity itself will not guarantee a higher score". A clear,
+  working predict → detect → decide → explain chain demos best.
+- **Human in the loop.** The system recommends and the operator approves (brief §9, §11, §24). An
+  operator-controlled **auto mode** may send small, routine, high-confidence shipments without a click.
+  Large, risky or low-confidence ones always wait for approval.
+- **Service level is the proof, not the whole score.** It measures decision quality (part of the
+  20% intelligence weight). The other 80% is UX, architecture, DevOps, resilience, observability and the demo.
+  Forecasts, warnings and alerts must be **visible to the operator**, not only fed into the planner.
