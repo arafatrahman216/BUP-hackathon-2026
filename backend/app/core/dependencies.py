@@ -43,7 +43,7 @@ def build_pipeline_service(session: AsyncSession, sim: SimulatorRepository, stat
     recs = RecommendationRepository(session)
     return PipelineService(
         sim, SnapshotRepository(session), recs, RecommendationService(recs, sim, state, settings), state, settings,
-        predictor=pipeline.build_predictor(settings),
+        predictor=pipeline.build_predictor(settings, state),
         planner=pipeline.build_planner(settings),
         fallback_planner=pipeline.build_fallback_planner(settings),
         explainer=pipeline.build_explainer(settings),

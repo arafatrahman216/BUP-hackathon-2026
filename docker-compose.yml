@@ -3,16 +3,41 @@
 #   API:      http://localhost:8001      Docs: http://localhost:8001/docs
 # The simulator runs separately (simulator/docker-compose.yml) on :8000.
 # Source folders are mounted and both servers hot-reload, so edits apply live.
-# The database and file storage are Supabase (configured in backend/.env), so
-# there is no local database container.
+# The database is the local `db` Postgres container (data kept in the `pgdata` volume).
+# File storage is still Supabase Storage (configured in backend/.env).
+# Override the DB credentials/port with POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB /
+# POSTGRES_PORT in a root .env file if needed.
 
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fuel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fuel}
+      POSTGRES_DB: ${POSTGRES_DB:-fuel}
+    ports:
+      # exposed so a backend run outside Docker (uvicorn on the host) can use it too
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build: ./backend
     env_file: ./backend/.env
     environment:
       # the simulator publishes :8000 on the host
       SIMULATOR_BASE_URL: ${SIMULATOR_BASE_URL:-http://host.docker.internal:8000}
+      # local Postgres container (overrides DATABASE_URL from backend/.env)
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fuel}:${POSTGRES_PASSWORD:-fuel}@db:5432/${POSTGRES_DB:-fuel}
+    depends_on:
+      db:
+        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "${BACKEND_PORT:-8001}:8000"
@@ -34,3 +59,6 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  pgdata:

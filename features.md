@@ -52,3 +52,13 @@ levels with risk, approval queue (approve / edit quantity / reject), alerts and 
 trucks, incoming ships and crises, decision log, stale banner.
 **Notes:** `frontend/src/pages/Dashboard/`, `components/dashboard/`, `hooks/useDashboard.js` (SSE, polling fallback). Tests in `DashboardPage.test.jsx`.
 
+### Intelligence: detect, predict, decide (intelligence-plan.md §0.1)
+**Status:** done
+**Notes:**
+- Detect (`pipeline/detect.py`, `Detector`): D1 status changes, crises with countdown, supply delay/shortfall vs first seen, failed trucks; D2 z-score (2+ ticks) + CUSUM on log(actual/forecast); D3 skipped ticks (stale/invalid/reset already in the service); D4 depot reconciliation + wasted fuel; D5 single-route stations; D6 dispatch bottleneck, overdue trucks; D7 incidents per region. Alerts carry `explained_by`, `since_tick`, `region_id`.
+- Predict (`demand_model.py`, `twin.py`, `StructuralPredictor`): published-pattern prior + EWMA per station x fuel x hour, shape shared across fuels, multiplier divided out; deterministic simulator copy gives time until empty (vs naive), risk %, unserved and tank overflow in 6 h, order-by and refill-from ticks, confidence; network outlook (days of fuel left per fuel, rationing flag, depot overflow, "do nothing" numbers).
+- Decide (`optimizer.py`): strategic LP (fair share per station when rationing) + tactical MIP-MPC (whole trucks, dispatch limit across fuels, road/station windows from crises, tank and depot overflow penalties, lexicographic weights); "wait: planned for tick N" for stations served later; with/without impact from the simulator copy on each plan. Fallback: `RulePlanner`.
+- Dashboard payload: `incidents`, `outlook` (incl. `planner` status/ms/budgets, `wasted_liters_observed`).
+- Settings: `PREDICTOR`, `PLANNER`, `FORECAST_HORIZON_TICKS`, `HISTORY_FETCH_ROWS`, `PLANNER_TIME_LIMIT_SECONDS`, `RATIONING_TRIGGER_DAYS`, `MIN_CONFIDENCE_AUTO`, `ANOMALY_*`.
+- Benchmark: `backend/scripts/bench_forecast.py` (walk-forward WAPE). Tests: `tests/test_intelligence.py`.
+- Not done: explain (deferred), daily-bucket strategic LP, 8-scenario test bench.

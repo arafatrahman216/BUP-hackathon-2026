@@ -14,6 +14,9 @@ os.environ.update({
     "AI_PROVIDER_ORDER": "gemini,groq",
     "AI_FALLBACK_ENABLED": "true",
     "PIPELINE_ENABLED": "false",
+    "PREDICTOR": "moving_average",  # the API tests pin the baseline; tests/test_intelligence.py covers the rest
+    "PLANNER": "rules",
+    "DEMO_MASK_ERRORS": "false",  # tests assert raw stage errors; test_masking.py turns it on
     "SIMULATOR_RETRIES": "0",
     "SIMULATOR_BACKOFF_SECONDS": "0",
     "SIMULATOR_BREAKER_THRESHOLD": "100",
