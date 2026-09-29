@@ -266,7 +266,8 @@ class PipelineService:
         rationing = bool(self.state.outlook.get("rationing"))
         for plan in plans:
             plan.reasons = importance_reasons(plan, world, self.settings.AUTO_POST_ENABLED,
-                                              min_confidence=self.settings.MIN_CONFIDENCE_AUTO, rationing=rationing)
+                                              min_confidence=self.settings.MIN_CONFIDENCE_AUTO, rationing=rationing,
+                                              urgent_depot_share=self.settings.URGENT_REVIEW_DEPOT_SHARE)
         self.state.blocked = blocked
         return plans
 

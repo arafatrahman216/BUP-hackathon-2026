@@ -15,7 +15,8 @@ from tests.fake_simulator import FakeSimulator
 pytestmark = pytest.mark.anyio
 
 # Defaults: rate 100 L/tick, lead 2 ticks, SAFETY_TICKS 8, URGENT_MARGIN 2
-#   cover < 4 -> urgent (operator), cover < 10 -> watch (auto), else safe.
+#   cover < 4 -> urgent, cover < 10 -> watch, else safe. Both are auto-posted on the fastest road;
+#   tests of the approval flow use `manual_approval` (auto-post off) to get an operator card.
 
 
 async def run(client) -> dict:
@@ -59,13 +60,36 @@ async def test_watch_risk_is_auto_posted(client, fake_sim):
     assert len(fake_sim.posts) == 1
 
 
-async def test_urgent_needs_operator_then_edit_and_approve(client, fake_sim):
+async def test_urgent_on_fastest_road_is_auto_posted(client, fake_sim):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent
+    state = await run(client)
+    rec = state["recommendations"]["recent"][0]
+    assert rec["risk"] == "urgent" and rec["reasons"] == []
+    assert rec["status"] == "POSTED" and rec["decision_mode"] == "auto"
+    assert fake_sim.posts[0]["route_id"] == "route-gazipur-mirpur"
+
+
+async def test_urgent_that_arrives_too_late_is_still_auto_posted(client, fake_sim):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 0  # already empty, truck needs 2 ticks
+    rec = (await run(client))["recommendations"]["recent"][0]
+    assert rec["status"] == "POSTED" and rec["reasons"] == [] and len(fake_sim.posts) == 1
+
+
+async def test_urgent_that_drains_the_depot_needs_operator(client, fake_sim):
+    fake_sim.world["depots"][0]["inventory"]["PETROL"] = 8000
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # arrives in time, but 7,000 of 8,000 L
+    (rec,) = (await run(client))["recommendations"]["open"]
+    assert rec["status"] == "PENDING_APPROVAL" and fake_sim.posts == []
+    assert rec["reasons"] == ["urgent: takes 88% of depot-gazipur's PETROL stock (8,000 L)"]
+
+
+async def test_operator_edits_and_approves(client, fake_sim, manual_approval):
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent
     state = await run(client)
     assert fake_sim.posts == []
     (rec,) = state["recommendations"]["open"]
     assert rec["status"] == "PENDING_APPROVAL" and rec["important"] and rec["risk"] == "urgent"
-    assert any("urgent" in r for r in rec["reasons"])
+    assert rec["reasons"] == ["auto-post is disabled"]
 
     too_big = await client.post(f"/api/v1/recommendations/{rec['id']}/approve", json={"quantity": 9000})
     assert too_big.status_code == 400 and too_big.json()["error"]["code"] == "QUANTITY_TOO_LARGE"
@@ -79,7 +103,7 @@ async def test_urgent_needs_operator_then_edit_and_approve(client, fake_sim):
     assert again.status_code == 409 and again.json()["error"]["code"] == "NOT_PENDING_APPROVAL"
 
 
-async def test_reject(client, fake_sim):
+async def test_reject(client, fake_sim, manual_approval):
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
     rec = (await run(client))["recommendations"]["open"][0]
     rejected = (await client.post(f"/api/v1/recommendations/{rec['id']}/reject", json={"note": "no"})).json()
@@ -182,7 +206,7 @@ async def test_stale_data_skips_station_we_just_shipped_to(client, fake_sim):
     assert state["recommendations"]["open"] == [] and len(fake_sim.posts) == 1
 
 
-async def test_approval_is_refitted_to_the_current_world(client, fake_sim):
+async def test_approval_is_refitted_to_the_current_world(client, fake_sim, manual_approval):
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
     rec = (await run(client))["recommendations"]["open"][0]
     assert rec["quantity"] == 7000
@@ -197,7 +221,7 @@ async def test_approval_is_refitted_to_the_current_world(client, fake_sim):
     assert "Resized from 7,000 to 3,000 L at tick 101" in approved["explanation"]
 
 
-async def test_approval_of_a_plan_whose_route_was_cut_is_refused_locally(client, fake_sim):
+async def test_approval_of_a_plan_whose_route_was_cut_is_refused_locally(client, fake_sim, manual_approval):
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
     rec = (await run(client))["recommendations"]["open"][0]
     fake_sim.route("route-gazipur-mirpur")["status"] = "DISRUPTED"
@@ -272,7 +296,7 @@ async def test_predict_failure_falls_back_to_last_rates(app, client, fake_sim, m
     assert all(f["source"] == "last_known_rate" and f["rate_per_tick"] == 100 for s in state["stations"] for f in s["fuels"])
 
 
-async def test_reset_expires_open_recommendations(client, fake_sim):
+async def test_reset_expires_open_recommendations(client, fake_sim, manual_approval):
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
     await run(client)
     fake_sim.world["instance"]["tick"] = 5
@@ -325,7 +349,7 @@ def test_circuit_breaker():
     assert breaker.state == "closed"
 
 
-async def test_expiry_needs_both_ticks_and_seconds(client, fake_sim, monkeypatch):
+async def test_expiry_needs_both_ticks_and_seconds(client, fake_sim, monkeypatch, manual_approval):
     from app.core.config import get_settings
 
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
@@ -341,8 +365,8 @@ async def test_expiry_needs_both_ticks_and_seconds(client, fake_sim, monkeypatch
     assert statuses.count("EXPIRED") == 1 and statuses.count("PENDING_APPROVAL") == 1  # replaced by a fresh one
 
 
-async def test_unanswered_urgent_card_auto_approves_at_its_deadline(client, fake_sim, monkeypatch):
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # urgent -> operator card
+async def test_unanswered_urgent_card_auto_approves_at_its_deadline(client, fake_sim, monkeypatch, manual_approval):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # urgent + auto-post off -> operator card
     state = await run(client)
     assert state["recommendations"]["open"][0]["status"] == "PENDING_APPROVAL" and fake_sim.posts == []
     monkeypatch.setattr(get_settings(), "DEADLINE_TOLERANCE_TICKS", 0.0)  # no loss allowed

@@ -32,7 +32,7 @@ def gemini(app) -> RecordingProvider:
 
 
 async def urgent_recommendation(client, fake_sim) -> dict:
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent, pending
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent; pending with auto-post off
     await client.post("/api/v1/pipeline/run")
     return (await client.get("/api/v1/recommendations")).json()["items"][0]
 
@@ -84,7 +84,7 @@ async def test_without_pipeline_cache_it_reads_live_with_the_same_rules(client, 
     assert "has not run yet" in body["context"]["_meta"]["notes"][0]
 
 
-async def test_uses_the_pipeline_cache_forecasts_and_alerts(client, fake_sim):
+async def test_uses_the_pipeline_cache_forecasts_and_alerts(client, fake_sim, manual_approval):
     rec = await urgent_recommendation(client, fake_sim)
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 14000  # changes after the run are not seen
     body = (await client.post("/api/v1/explain/context", json={"profile": "recommendation",
@@ -122,7 +122,7 @@ async def test_general_profile_ranks_stations(client, fake_sim):
     assert (first["station_id"], first["fuel_type"], first["cover_ticks"]) == ("station-tongi", "PETROL", 5.0)
 
 
-async def test_ask_about_a_recommendation_is_stored(client, fake_sim, gemini):
+async def test_ask_about_a_recommendation_is_stored(client, fake_sim, gemini, manual_approval):
     rec = await urgent_recommendation(client, fake_sim)
     history = (await client.get(f"/api/v1/explain/recommendations/{rec['id']}")).json()
     assert history["status"] == "PENDING_APPROVAL" and history["items"] == []
@@ -142,7 +142,7 @@ async def test_ask_about_a_recommendation_is_stored(client, fake_sim, gemini):
     assert [q["question"] for q in history["items"]] == ["Can I send less, and how long would it last?"]
 
 
-async def test_old_action_is_flagged(client, fake_sim):
+async def test_old_action_is_flagged(client, fake_sim, manual_approval):
     rec = await urgent_recommendation(client, fake_sim)
     fake_sim.world["instance"]["tick"] = 130
     await client.post("/api/v1/pipeline/run")
@@ -191,7 +191,7 @@ async def test_errors(client, fake_sim):
     assert down.status_code == 503 and down.json()["error"]["code"] == "SIMULATOR_UNAVAILABLE"
 
 
-async def test_simulator_down_after_a_run_explains_from_cache(client, fake_sim, gemini):
+async def test_simulator_down_after_a_run_explains_from_cache(client, fake_sim, gemini, manual_approval):
     rec = await urgent_recommendation(client, fake_sim)
     fake_sim.down = True
     response = await client.post(f"/api/v1/explain/recommendations/{rec['id']}", json={"question": "Why?"})

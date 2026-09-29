@@ -96,9 +96,13 @@ def _event_touches(event: dict[str, Any], world: World, plan: Plan) -> bool:
 
 
 def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
-                       min_confidence: float = 0.0, rationing: bool = False) -> list[str]:
+                       min_confidence: float = 0.0, rationing: bool = False,
+                       urgent_depot_share: float = 0.5) -> list[str]:
     """Why a plan needs the operator. Empty list -> it may be auto-posted.
 
+    Only real trade-offs go to the operator. An urgent shipment is auto-posted, even when the tank is
+    already empty: waiting for a human would only add unserved demand. It needs the operator only when it
+    takes a large share of the depot's stock, which other stations may need.
     Rationing is approved at the policy level: shipments inside a station's fair-share budget
     stay automatic; only over-budget ones need the operator."""
     reasons = []
@@ -106,9 +110,12 @@ def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
         reasons.append(f"low forecast confidence ({plan.confidence:.2f})")
     if rationing and plan.over_budget:
         reasons.append("rationing: more than this station's fair share")
-    if plan.risk == "urgent":
-        reasons.append("urgent: station may run dry before the truck arrives")
     route = world.routes[plan.route_id]
+    if plan.risk == "urgent":
+        stock = float(world.depots[plan.depot_id]["inventory"].get(plan.fuel_type, 0))
+        if stock > 0 and plan.quantity > urgent_depot_share * stock:
+            reasons.append(f"urgent: takes {plan.quantity / stock:.0%} of {plan.depot_id}'s "
+                           f"{plan.fuel_type} stock ({stock:,.0f} L)")
     fastest = min(int(r["transit_ticks"]) for r in world.routes_to(plan.station_id))
     if int(route["transit_ticks"]) > fastest:
         reasons.append(f"backup route ({route['transit_ticks']} ticks instead of {fastest})")

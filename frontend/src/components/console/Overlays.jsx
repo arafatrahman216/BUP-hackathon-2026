@@ -90,6 +90,97 @@ export function SidePanel({ entity, kind, rec, onClose, onOpenRec }) {
 
 const STEP_L = 500
 
+const humanize = (key) => key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+const isPlain = (v) => v === null || typeof v !== 'object'
+const isEmpty = (v) => v === null || v === undefined || (Array.isArray(v) && v.length === 0) || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)
+
+function formatCtxValue(v) {
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+  if (typeof v === 'number') return Number.isInteger(v) ? fmt(v) : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
+  return String(v)
+}
+
+/** Any JSON value from the explain context → key/value grid, table (array of objects) or comma list. */
+function ContextNode({ value }) {
+  if (isPlain(value)) return formatCtxValue(value)
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 'None'
+    if (value.every(isPlain)) return value.map(formatCtxValue).join(', ')
+    const cols = [...new Set(value.flatMap((row) => Object.keys(row)))]
+    return (
+      <div className={styles.ctxTableWrap}>
+        <table className={styles.ctxTable}>
+          <thead><tr>{cols.map((c) => <th key={c}>{humanize(c)}</th>)}</tr></thead>
+          <tbody>
+            {value.map((row, i) => (
+              <tr key={i}>{cols.map((c) => <td key={c}><ContextNode value={row[c]} /></td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+  const entries = Object.entries(value).filter(([, v]) => !isEmpty(v))
+  if (entries.length === 0) return '—'
+  return (
+    <dl className={styles.ctxGrid}>
+      {entries.map(([k, v]) => (
+        <div key={k} className={styles.ctxRow}>
+          <dt className={styles.ctxKey}>{humanize(k)}</dt>
+          <dd className={styles.ctxVal}><ContextNode value={v} /></dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/** The explain context (_meta, clock, action, forecast, alerts, ...) as collapsible sections instead of raw JSON. */
+function ContextView({ data }) {
+  const entries = Object.entries(data).filter(([, v]) => !isEmpty(v))
+  return (
+    <div className={styles.ctxSections}>
+      {entries.map(([key, value]) => (
+        <details key={key} className={styles.ctxSection}>
+          <summary>{humanize(key)}{Array.isArray(value) ? ` (${value.length})` : ''}</summary>
+          <ContextNode value={value} />
+        </details>
+      ))}
+    </div>
+  )
+}
+
+/** **bold** → <strong>, rest as plain text. That's the only inline markdown the AI/template answers use. */
+function Inline({ text }) {
+  const parts = text.split(/\*\*(.+?)\*\*/g)
+  return parts.map((part, i) => (i % 2 ? <strong key={i}>{part}</strong> : part))
+}
+
+/**
+ * Renders an AI/template answer's light markdown (paragraphs + "* "/"- " bullet lists + **bold**)
+ * instead of dumping it as one dense paragraph with literal asterisks.
+ */
+function AnswerText({ text }) {
+  const lines = (text || '').split(/\n+/).map((l) => l.trim()).filter(Boolean)
+  const blocks = []
+  let list = null
+  for (const line of lines) {
+    const bullet = /^[*-]\s+(.*)/.exec(line)
+    if (bullet) {
+      if (!list) { list = []; blocks.push(list) }
+      list.push(bullet[1])
+    } else {
+      list = null
+      blocks.push(line)
+    }
+  }
+  return blocks.map((b, i) => (
+    Array.isArray(b)
+      ? <ul key={i} className={styles.answerList}>{b.map((item, j) => <li key={j}><Inline text={item} /></li>)}</ul>
+      : <p key={i} className={styles.answerText}><Inline text={b} /></p>
+  ))
+}
+
 /**
  * Ask AI about one action (queue item or log entry): "Ask why", the suggested questions for its
  * status, a free-text question, and the answers asked before. `onAsk(item, q, kind)` and
@@ -140,11 +231,11 @@ function AskAI({ item, kind, onAsk, onQuestions }) {
         <div className={styles.answer} aria-live="polite">
           {!answer.loading && <span className={styles.badge}>{answer.badge}</span>}
           {answer.q !== 'why' && <span className={styles.answerQ}>{answer.q}</span>}
-          <p className={styles.answerText}>{answer.loading ? 'Reading engine data…' : answer.text}</p>
+          {answer.loading ? <p className={styles.answerText}>Reading engine data…</p> : <AnswerText text={answer.text} />}
           {!answer.loading && answer.context && (
             <details className={styles.answerData}>
               <summary>Data the AI used</summary>
-              <pre>{JSON.stringify(answer.context, null, 2)}</pre>
+              <ContextView data={answer.context} />
             </details>
           )}
         </div>
@@ -155,7 +246,7 @@ function AskAI({ item, kind, onAsk, onQuestions }) {
           {history.map((h, i) => (
             <div key={`${h.q}-${i}`} className={styles.answerOld}>
               <span className={styles.answerQ}>{h.q}</span>
-              <p className={styles.answerText}>{h.text}</p>
+              <AnswerText text={h.text} />
               <span className={styles.badge}>{h.badge}{h.at != null ? ` · asked at tick ${h.at}` : ''}</span>
             </div>
           ))}

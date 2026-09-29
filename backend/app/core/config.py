@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     PLANNER_TIME_LIMIT_SECONDS: float = 2.0
     RATIONING_TRIGGER_DAYS: float = 3.0  # ration a fuel when the network has less than this left
     MIN_CONFIDENCE_AUTO: float = 0.5
+    URGENT_REVIEW_DEPOT_SHARE: float = 0.5  # urgent shipment taking more than this share of the depot's stock -> operator
     DEADLINE_TOLERANCE_TICKS: float = 1.0  # unanswered card auto-approves once waiting 1 more tick loses > this x tick demand
     DEADLINE_CONFIDENCE_SCALE: float = 3.0  # extra ticks of tolerance x (1 - forecast confidence)
     MIN_REVIEW_SECONDS: float = 10.0  # human reading time, kept only while waiting costs nothing  # below this a recommendation needs the operator

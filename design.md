@@ -259,8 +259,10 @@ read → validate → save → detect → predict → decide → explain
   - *decide*: for `watch`/`urgent` (lowest cover first), fastest AVAILABLE route; qty = min(free space after incoming,
     route max, depot stock − reserve, depot dispatch left this tick), floored to 100 L, ≥ `MIN_SHIPMENT_LITERS`.
     Skips station/fuels with an open recommendation. Unplannable needs are reported as `blocked`.
-  - *important?* urgent risk, backup route, depot not OPEN, an ACTIVE crisis touching the station/region/depot/route,
-    or `AUTO_POST_ENABLED=false` → `PENDING_APPROVAL`; otherwise `APPROVED` (auto).
+  - *important?* only real trade-offs: low confidence, rationing over fair share, backup route, depot not OPEN,
+    an ACTIVE crisis touching the station/region/depot/route, stale data, or `AUTO_POST_ENABLED=false` →
+    an urgent shipment taking more than `URGENT_REVIEW_DEPOT_SHARE` (50%) of the depot's stock of that fuel →
+    `PENDING_APPROVAL`; otherwise `APPROVED` (auto). Other urgent shipments auto-post, even when the tank is already empty.
   - *explain*: template text.
   - *re-check* (right before every post, `pipeline.decide.recheck`): the plan is re-fitted to the current world with
     the planner's limits (free space after incoming, route max, depot stock − reserve, dispatch left). Auto plans and
@@ -375,3 +377,4 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | Resilience | `DEMO_MASK_ERRORS=true` (default): stage errors show as "fallback", raw exception text is replaced, predict falls back to known rates then the published profiles, a never-reached simulator shows the hard-coded baseline world (`pipeline/demo_data.py`, never posted from), the dashboard payload falls back to the last good one; every mask logs `ERROR MASKED ...` with the traceback | User requirement: no error may reach the frontend during the demo; the log keeps the evidence |
 | 2026-09-29 | Intelligence | Demand noise is uniform ±profile noise (measured: ratios 0.900-1.100), so the error floor is noise/√3; past demand is de-spiked by event windows, including RESOLVED spikes | Measured on simulator/dataset; the old floor overstated risk 1.7×, and resolved spikes leaked into the base rate after a restart |
 | 2026-09-29 | Decisions | Unanswered approval cards auto-approve at a **dynamic deadline**: each tick the simulator copy prices waiting 0..H ticks; the card waits while the extra unserved liters stay within `demand per tick × (DEADLINE_TOLERANCE_TICKS + DEADLINE_CONFIDENCE_SCALE × (1 − confidence))`, capped by APPROVAL_TTL_TICKS; at the deadline it is re-checked and resized (fair share, bridge amount for low confidence, dispatch/tank room) or expired if no longer needed; logged as `auto-deadline` | User decision: human review must never starve a station; unsure forecasts buy the operator more time |
+| 2026-09-29 | Decisions | **Urgent risk alone no longer needs the operator** (supersedes "urgent" in the "Important" rows above): the operator is asked only when there is a trade-off (low confidence, over fair share, backup route, depot not OPEN, active crisis, stale data, auto-post off, or an urgent shipment taking more than `URGENT_REVIEW_DEPOT_SHARE` of the depot's stock). "Truck arrives after the tank is empty" is **not** a trigger | User decision: on the fastest open road there is nothing better to choose, so a review only added unserved demand at a station that is already dry; draining a depot is a real choice between stations |
