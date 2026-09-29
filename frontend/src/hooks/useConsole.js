@@ -3,6 +3,10 @@ import { useSearchParams } from 'react-router-dom'
 import { explainApi, recommendationsApi } from '../api/api'
 import { DEMO_LOOP, DEMO_START, DEMO_STATES, buildDemoModel, demoDecisionEntry } from '../utils/console/demo'
 import { fmt } from '../utils/console/format'
+<<<<<<< HEAD
+=======
+import { ASK_SYSTEM, askPrompt, isComplete, isGrounded } from '../utils/console/grounding'
+>>>>>>> e2bf3a9c2ad767831c3fbed9216190037cb51fcc
 import { buildLiveModel } from '../utils/console/live'
 import { useDashboard } from './useDashboard'
 
@@ -10,6 +14,7 @@ const DEMO_TICK_MS = 3000
 const THEME_KEY = 'fuelops.theme'
 const AI_BADGE = 'Written by AI'
 const TEMPLATE_BADGE = 'Template text · AI unavailable'
+<<<<<<< HEAD
 // demo answers are keyed by these (utils/console/demo.js); live questions come from the backend
 const DEMO_QUESTIONS = ['Why not Patiya?', 'Wait an hour?', 'If the road closes?']
 const WHY = {
@@ -23,6 +28,10 @@ export const toAnswer = (qa) => ({
   q: qa.question, text: qa.answer, at: qa.tick, context: qa.context,
   badge: providerName(qa.provider) ? `${AI_BADGE} (${providerName(qa.provider)} · ${qa.model})` : AI_BADGE,
 })
+=======
+// Gemini 2.5 counts hidden "thinking" tokens against this budget: 220 cut answers mid-sentence
+const AI_MAX_TOKENS = 1024
+>>>>>>> e2bf3a9c2ad767831c3fbed9216190037cb51fcc
 
 function readTheme() {
   try {
@@ -150,10 +159,21 @@ export function useConsole() {
         return { q: question, text: question === 'why' ? why : item.answers?.[question] ?? why, badge: `${AI_BADGE} (Gemini)` }
       }
       try {
+<<<<<<< HEAD
         return { ...toAnswer(await explainApi.ask(item.id, question === 'why' ? WHY[kind] : question)), q: question }
       } catch (err) {
         const why = err?.code === 'RATE_LIMITED' ? ` · too many questions, retry in ${err.retryAfter ?? 60} s` : ''
         return { q: question, text: item.tpl, badge: `${TEMPLATE_BADGE}${why}` }
+=======
+        const res = await aiApi.generate({ prompt: askPrompt(rec.facts, question), system: ASK_SYSTEM, max_tokens: AI_MAX_TOKENS, temperature: 0.2 })
+        const text = (res?.text || '').trim()
+        if (isComplete(text) && isGrounded(text, rec.facts)) {
+          const provider = res.provider ? res.provider.charAt(0).toUpperCase() + res.provider.slice(1) : null
+          return { text, badge: provider ? `${AI_BADGE} (${provider})` : AI_BADGE }
+        }
+      } catch {
+        /* AI unavailable or rate limited: fall back to the template below */
+>>>>>>> e2bf3a9c2ad767831c3fbed9216190037cb51fcc
       }
     },
     [source, demo],

@@ -48,6 +48,9 @@ class PipelineState:
     detector: Any = None  # app.pipeline.detect.Detector (alert history, CUSUM, incidents)
     outlook: dict[str, Any] = field(default_factory=dict)  # network fuel left, rationing, depot overflow
     planner_info: dict[str, Any] = field(default_factory=dict)
+    deadlines: dict[int, dict[str, Any]] = field(default_factory=dict)  # rec id -> auto-approve deadline
+    ticks_per_second: float | None = None  # measured simulator speed (for countdowns)
+    _tick_seen: tuple[int, float] | None = None
     demo_data: bool = False  # true -> showing the hard-coded baseline world (simulator never reached)
     _last_payload: dict[str, Any] | None = None  # last optimizer run: status, ms, budgets
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # decide/post vs operator actions
@@ -119,7 +122,8 @@ class PipelineState:
             "outlook": {**self.outlook, "planner": self.planner_info,
                         "wasted_liters_observed": self.detector.wasted if self.detector else {}},
             "blocked": [b.__dict__ for b in self.blocked],
-            "recommendations": self.recommendations,
+            "recommendations": {k: [{**r, "deadline": self.deadlines.get(r.get("id"))} if r.get("status") == "PENDING_APPROVAL" else r
+                                    for r in v] for k, v in self.recommendations.items()},
             "stations": [], "depots": [], "routes": [], "supply": [], "events": [], "allocations": [], "metrics": {},
         }
         if not w:

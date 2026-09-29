@@ -225,9 +225,18 @@ export function RecommendationModal({ rec, simDown, onClose, onAsk, onQuestions,
         </div>
 
         <div className={styles.tiles}>
-          <div className={styles.tile}><span className={styles.hint}>Importance</span><span className={styles.tileV}>{rec.importance}</span></div>
-          <div className={styles.tile}><span className={styles.hint}>Risk before</span><span className={styles.tileV} style={cv('var(--urgent)')}>{rec.riskB}</span></div>
-          <div className={styles.tile}><span className={styles.hint}>Risk after</span><span className={styles.tileV} style={cv('var(--safe)')}>{rec.riskA}</span></div>
+          <div className={styles.tile}>
+            <span className={styles.hint}>Importance</span><span className={styles.tileV}>{rec.importance}</span>
+            {rec.importanceCap && <span className={styles.badge}>{rec.importanceCap}</span>}
+          </div>
+          <div className={styles.tile}>
+            <span className={styles.hint}>Risk before</span><span className={styles.tileV} style={cv('var(--urgent)')}>{rec.riskB}</span>
+            {rec.riskBCap && <span className={styles.badge}>{rec.riskBCap}</span>}
+          </div>
+          <div className={styles.tile}>
+            <span className={styles.hint}>Risk after</span><span className={styles.tileV} style={cv('var(--safe)')}>{rec.riskA}</span>
+            {rec.riskACap && <span className={styles.badge}>{rec.riskACap}</span>}
+          </div>
         </div>
 
         <AskAI item={rec} kind="rec" onAsk={onAsk} onQuestions={onQuestions} />
