@@ -44,6 +44,7 @@ Rules are hard-coded (no model, no optimization); the model/solution plugs in la
 - Code: `app/pipeline/`, `services/pipeline_service.py`, `services/recommendation_service.py`, `repositories/simulator_repository.py`. Swap stages in `app/pipeline/__init__.py`.
 - Env: `SIMULATOR_*`, `PIPELINE_*`, `FORECAST_WINDOW_TICKS`, `SAFETY_TICKS`, `URGENT_MARGIN_TICKS`, `MIN_SHIPMENT_LITERS`, `DEPOT_RESERVE_LITERS`, `AUTO_POST_ENABLED`, `APPROVAL_TTL_TICKS`, `APPROVAL_MIN_SECONDS`, `SNAPSHOT_EVERY_TICKS`.
 - Posting: every approved plan is re-fitted to the current world just before it is posted (`pipeline.decide.recheck`); dispatch-limit refusals retry next tick; idempotency keys use a random per-recommendation token, and lost answers are reconciled by key.
+- Operator review on stockout risk (`ReviewRules` in `pipeline/decide.py`): half-empty + emptying within the horizon, stockout probability, thin margin over transit, unserved even with the shipment. Env `REVIEW_RISK_ENABLED`, `REVIEW_FILL_FRACTION`, `REVIEW_STOCKOUT_PROB`, `REVIEW_EMPTY_MARGIN_TICKS`.
 - Stale data: cautious mode (urgent only, shipments × `STALE_QUANTITY_FACTOR`, skip recent destinations); env `STALE_DATA_MODE`, `STALE_QUANTITY_FACTOR`. Dashboard shows `pipeline.cautious`.
 - Not yet: shipment tracking/replacement (FAILED allocations), cancel, operator auth.
 

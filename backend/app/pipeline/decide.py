@@ -95,17 +95,56 @@ def _event_touches(event: dict[str, Any], world: World, plan: Plan) -> bool:
     return any(not params[k] or filters[k] in params[k] for k in present)
 
 
+@dataclass
+class ReviewRules:
+    """Stockout-risk triggers that send a shipment to the operator before the tank is nearly empty."""
+
+    enabled: bool = True
+    fill_fraction: float = 0.5  # tank at or below this share of capacity ...
+    fill_horizon_ticks: float = 24.0  # ... and empties within this many ticks at the current rate
+    stockout_prob: float = 0.3  # chance of running dry within the forecast horizon
+    empty_margin_ticks: float = 4.0  # empties less than this many ticks after the fastest truck can land
+
+
+def _risk_reasons(plan: Plan, f: Forecast | None, rules: ReviewRules) -> list[str]:
+    """Why this station is at real risk of running dry: each reason carries the numbers behind it."""
+    if not rules.enabled or f is None:
+        return []
+    reasons = []
+    tue = f.ticks_until_empty if f.ticks_until_empty is not None else plan.ticks_until_empty
+    rate = f.rate_per_tick or 0.0
+    fill = f.inventory / f.capacity if f.capacity else None
+    if fill is not None and fill <= rules.fill_fraction and tue is not None and tue <= rules.fill_horizon_ticks:
+        reasons.append(f"tank at {fill:.0%} ({f.inventory:,.0f} / {f.capacity:,.0f} L), burning {rate:,.0f} L/tick: "
+                       f"empty in ~{tue:.1f} ticks without a delivery")
+    if f.p_stockout is not None and f.p_stockout >= rules.stockout_prob:
+        reasons.append(f"stockout risk {f.p_stockout:.0%} within the forecast horizon "
+                       f"(threshold {rules.stockout_prob:.0%})")
+    if tue is not None and f.lead_ticks is not None and tue - f.lead_ticks < rules.empty_margin_ticks:
+        margin = tue - f.lead_ticks
+        reasons.append(f"fast drain: empty in ~{tue:.1f} ticks, fastest truck needs {f.lead_ticks} "
+                       + (f"(only {margin:.1f} ticks to spare)" if margin >= 0 else f"(dry ~{-margin:.1f} ticks before it lands)"))
+    unmet_after = plan.impact.get("unmet_after") if plan.impact else None
+    if unmet_after:
+        reasons.append(f"not enough: even with this shipment ~{unmet_after:,.0f} L stay unserved "
+                       f"(vs ~{plan.impact.get('unmet_before', 0):,.0f} L without it)")
+    return reasons
+
+
 def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
                        min_confidence: float = 0.0, rationing: bool = False,
-                       urgent_depot_share: float = 0.5) -> list[str]:
+                       urgent_depot_share: float = 0.5, forecast: Forecast | None = None,
+                       review: ReviewRules | None = None) -> list[str]:
     """Why a plan needs the operator. Empty list -> it may be auto-posted.
 
-    Only real trade-offs go to the operator. An urgent shipment is auto-posted, even when the tank is
-    already empty: waiting for a human would only add unserved demand. It needs the operator only when it
-    takes a large share of the depot's stock, which other stations may need.
+    Trade-offs go to the operator (low confidence, over fair share, backup route, depot not OPEN, active
+    crisis, stale data, draining a depot), and so does real stockout risk (`ReviewRules`): a tank half empty
+    and emptying within the horizon, a high stockout probability, a thin margin over the truck's transit,
+    or a shipment that still leaves demand unserved. The dynamic approval deadline
+    auto-approves an unanswered card once waiting starts to cost fuel, so review never starves a station.
     Rationing is approved at the policy level: shipments inside a station's fair-share budget
     stay automatic; only over-budget ones need the operator."""
-    reasons = []
+    reasons = _risk_reasons(plan, forecast, review or ReviewRules())
     if plan.confidence is not None and plan.confidence < min_confidence:
         reasons.append(f"low forecast confidence ({plan.confidence:.2f})")
     if rationing and plan.over_budget:

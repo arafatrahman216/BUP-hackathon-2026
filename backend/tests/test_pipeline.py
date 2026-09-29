@@ -83,6 +83,41 @@ async def test_urgent_that_drains_the_depot_needs_operator(client, fake_sim):
     assert rec["reasons"] == ["urgent: takes 88% of depot-gazipur's PETROL stock (8,000 L)"]
 
 
+@pytest.fixture
+def risk_review(monkeypatch):
+    monkeypatch.setattr(get_settings(), "REVIEW_RISK_ENABLED", True)
+
+
+async def test_half_empty_tank_emptying_soon_needs_operator(client, fake_sim, risk_review):
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800  # 4% full, empty in 8 ticks, truck needs 2
+    (rec,) = (await run(client))["recommendations"]["open"]
+    assert rec["status"] == "PENDING_APPROVAL" and fake_sim.posts == []
+    assert rec["reasons"] == ["tank at 4% (800 / 18,000 L), burning 100 L/tick: empty in ~8.0 ticks without a delivery"]
+
+
+async def test_fast_drain_needs_operator(client, fake_sim, risk_review):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # empty in 3 ticks, truck needs 2
+    (rec,) = (await run(client))["recommendations"]["open"]
+    assert rec["status"] == "PENDING_APPROVAL"
+    assert "fast drain: empty in ~3.0 ticks, fastest truck needs 2 (only 1.0 ticks to spare)" in rec["reasons"]
+
+
+def test_risk_reasons_use_stockout_probability_and_shipment_impact():
+    from app.pipeline.decide import ReviewRules, _risk_reasons
+    from app.pipeline.types import Forecast, Plan
+    f = Forecast("s", "DIESEL", inventory=9000, capacity=10000, rate_per_tick=100, incoming=0,
+                 ticks_until_empty=90, cover_ticks=90, lead_ticks=2, risk="watch", p_stockout=0.45)
+    plan = Plan("s", "DIESEL", "d", "r", 5000, "watch", 90,
+                impact={"unmet_before": 1200, "unmet_after": 400})
+    assert _risk_reasons(plan, f, ReviewRules()) == [
+        "stockout risk 45% within the forecast horizon (threshold 30%)",
+        "not enough: even with this shipment ~400 L stay unserved (vs ~1,200 L without it)",
+    ]
+    f.p_stockout, plan.impact = 0.1, {}
+    assert _risk_reasons(plan, f, ReviewRules()) == []  # 90% full, safe -> auto
+    assert _risk_reasons(plan, f, ReviewRules(enabled=False)) == []
+
+
 async def test_operator_edits_and_approves(client, fake_sim, manual_approval):
     fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # cover 3 ticks -> urgent
     state = await run(client)

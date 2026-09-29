@@ -16,6 +16,7 @@ os.environ.update({
     "PIPELINE_ENABLED": "false",
     "PREDICTOR": "moving_average",  # the API tests pin the baseline; tests/test_intelligence.py covers the rest
     "PLANNER": "rules",
+    "REVIEW_RISK_ENABLED": "false",  # pipeline-mechanics tests auto-post low tanks; test_pipeline.py turns it on
     "DEMO_MASK_ERRORS": "false",  # tests assert raw stage errors; test_masking.py turns it on
     "SIMULATOR_RETRIES": "0",
     "SIMULATOR_BACKOFF_SECONDS": "0",

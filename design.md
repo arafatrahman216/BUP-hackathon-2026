@@ -265,7 +265,11 @@ read → validate → save → detect → predict → decide → explain
   - *important?* only real trade-offs: low confidence, rationing over fair share, backup route, depot not OPEN,
     an ACTIVE crisis touching the station/region/depot/route, stale data, or `AUTO_POST_ENABLED=false` →
     an urgent shipment taking more than `URGENT_REVIEW_DEPOT_SHARE` (50%) of the depot's stock of that fuel →
-    `PENDING_APPROVAL`; otherwise `APPROVED` (auto). Other urgent shipments auto-post, even when the tank is already empty.
+    `PENDING_APPROVAL`, **or stockout risk** (`REVIEW_RISK_ENABLED`, `ReviewRules`): tank ≤ `REVIEW_FILL_FRACTION` (50%) full
+    and empty within `FORECAST_HORIZON_TICKS`, stockout probability ≥ `REVIEW_STOCKOUT_PROB` (30%), less than
+    `REVIEW_EMPTY_MARGIN_TICKS` (4) between "empty" and the fastest truck landing, or demand still unserved with the
+    shipment (simulator copy). Each reason carries its numbers. Otherwise `APPROVED` (auto); unanswered cards auto-approve
+    at the dynamic deadline.
   - *explain*: template text.
   - *re-check* (right before every post, `pipeline.decide.recheck`): the plan is re-fitted to the current world with
     the planner's limits (free space after incoming, route max, depot stock − reserve, dispatch left). Auto plans and
@@ -407,3 +411,4 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | Pipeline | CPU-bound stages (predict, MIP decide) run in `asyncio.to_thread` | Load test: running them on the event loop stalled every API request for ~0.5 s per tick; throughput fell as clients were added |
 | 2026-09-29 | Monitoring | Load-test results go to their own Grafana dashboard via metrics the load tester serves while it runs (scraped by Prometheus), not a JSON/CSV datasource plugin | No extra Grafana plugin or Pushgateway; the live run and the per-step results share one data path |
 | 2026-09-29 | Decisions | **Urgent risk alone no longer needs the operator** (supersedes "urgent" in the "Important" rows above): the operator is asked only when there is a trade-off (low confidence, over fair share, backup route, depot not OPEN, active crisis, stale data, auto-post off, or an urgent shipment taking more than `URGENT_REVIEW_DEPOT_SHARE` of the depot's stock). "Truck arrives after the tank is empty" is **not** a trigger | User decision: on the fastest open road there is nothing better to choose, so a review only added unserved demand at a station that is already dry; draining a depot is a real choice between stations |
+| 2026-09-29 | Decisions | **Stockout risk sends shipments to the operator again** (supersedes "urgent risk alone no longer needs the operator"): half-empty tank emptying within the horizon, stockout probability ≥ 30%, < 4 ticks margin over the fastest truck, or unserved demand even with the shipment; each reason states its numbers; `REVIEW_RISK_ENABLED=false` restores the previous policy | User decision: review should start when a station is at real risk, not when it is almost dry; the dynamic approval deadline still auto-approves before waiting costs fuel |

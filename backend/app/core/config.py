@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     RATIONING_TRIGGER_DAYS: float = 3.0  # ration a fuel when the network has less than this left
     MIN_CONFIDENCE_AUTO: float = 0.5
     URGENT_REVIEW_DEPOT_SHARE: float = 0.5  # urgent shipment taking more than this share of the depot's stock -> operator
+    REVIEW_RISK_ENABLED: bool = True  # stockout-risk triggers below send shipments to the operator
+    REVIEW_FILL_FRACTION: float = 0.5  # tank at/below this share of capacity and empty within the horizon -> operator
+    REVIEW_STOCKOUT_PROB: float = 0.3  # stockout probability within the horizon at/above this -> operator
+    REVIEW_EMPTY_MARGIN_TICKS: float = 4.0  # empties less than this many ticks after the fastest truck lands -> operator
     DEADLINE_TOLERANCE_TICKS: float = 1.0  # unanswered card auto-approves once waiting 1 more tick loses > this x tick demand
     DEADLINE_CONFIDENCE_SCALE: float = 3.0  # extra ticks of tolerance x (1 - forecast confidence)
     MIN_REVIEW_SECONDS: float = 10.0  # human reading time, kept only while waiting costs nothing  # below this a recommendation needs the operator

@@ -24,7 +24,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.models.recommendation import RecommendationStatus
-from app.pipeline.decide import Planner, floor_100, importance_reasons
+from app.pipeline.decide import Planner, ReviewRules, floor_100, importance_reasons
 from app import pipeline as pipeline_builders
 from app.pipeline.demo_data import demo_forecasts, demo_world
 from app.pipeline.detect import Detector, stockout_alerts
@@ -264,10 +264,15 @@ class PipelineService:
         if not fallback:
             self.state.planner_info = {"planner": planner.name, **getattr(planner, "last", {})}
         rationing = bool(self.state.outlook.get("rationing"))
+        st = self.settings
+        review = ReviewRules(enabled=st.REVIEW_RISK_ENABLED, fill_fraction=st.REVIEW_FILL_FRACTION,
+                             fill_horizon_ticks=st.FORECAST_HORIZON_TICKS, stockout_prob=st.REVIEW_STOCKOUT_PROB,
+                             empty_margin_ticks=st.REVIEW_EMPTY_MARGIN_TICKS)
         for plan in plans:
-            plan.reasons = importance_reasons(plan, world, self.settings.AUTO_POST_ENABLED,
-                                              min_confidence=self.settings.MIN_CONFIDENCE_AUTO, rationing=rationing,
-                                              urgent_depot_share=self.settings.URGENT_REVIEW_DEPOT_SHARE)
+            plan.reasons = importance_reasons(plan, world, st.AUTO_POST_ENABLED,
+                                              min_confidence=st.MIN_CONFIDENCE_AUTO, rationing=rationing,
+                                              urgent_depot_share=st.URGENT_REVIEW_DEPOT_SHARE,
+                                              forecast=forecasts.get((plan.station_id, plan.fuel_type)), review=review)
         self.state.blocked = blocked
         return plans
 
