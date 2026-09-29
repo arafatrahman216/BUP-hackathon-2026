@@ -1,0 +1,9 @@
+.wrap {
+  text-align: center;
+  padding: var(--space-6) 0;
+}
+
+.wrap h1 {
+  margin: 0;
+  font-size: 3rem;
+}
