@@ -112,7 +112,10 @@ class Settings(BaseSettings):
     HISTORY_FETCH_ROWS: int = 1200  # demand-history rows read per tick (API max 2000)
     PLANNER_TIME_LIMIT_SECONDS: float = 2.0
     RATIONING_TRIGGER_DAYS: float = 3.0  # ration a fuel when the network has less than this left
-    MIN_CONFIDENCE_AUTO: float = 0.5  # below this a recommendation needs the operator
+    MIN_CONFIDENCE_AUTO: float = 0.5
+    DEADLINE_TOLERANCE_TICKS: float = 1.0  # unanswered card auto-approves once waiting 1 more tick loses > this x tick demand
+    DEADLINE_CONFIDENCE_SCALE: float = 3.0  # extra ticks of tolerance x (1 - forecast confidence)
+    MIN_REVIEW_SECONDS: float = 10.0  # human reading time, kept only while waiting costs nothing  # below this a recommendation needs the operator
     ANOMALY_Z: float = 3.0  # single-tick z-score threshold (needs 2 ticks in a row)
     ANOMALY_CUSUM_K: float = 0.05  # CUSUM slack on log(actual/forecast)
     ANOMALY_CUSUM_H: float = 0.5  # CUSUM alarm level

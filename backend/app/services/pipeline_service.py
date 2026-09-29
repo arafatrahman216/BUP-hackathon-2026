@@ -131,6 +131,10 @@ class PipelineService:
                 self.predictor.model = state.demand_model
         pipeline_builders.ensure_models(state, s)
         state.world, state.world_read_at = world, time.time()
+        if state._tick_seen and tick > state._tick_seen[0]:
+            rate = (tick - state._tick_seen[0]) / max(1e-3, time.time() - state._tick_seen[1])
+            state.ticks_per_second = rate if state.ticks_per_second is None else 0.7 * state.ticks_per_second + 0.3 * rate
+        state._tick_seen = (tick, time.time())
 
         # 2. validate
         (issues, fatal), val = await stage("validate", lambda: _async(validate_world, world))
@@ -190,6 +194,7 @@ class PipelineService:
             if not state.acting:
                 skip("decide", "explain", "post", why="data stale or invalid")
             else:
+                open_recs = await self._deadline_approvals(world, forecasts, open_recs)
                 open_recs = await self._expire_open(open_recs, tick)
                 plans, dec = await stage("decide", lambda: _async(self._decide, world, forecasts, open_recs))
                 if dec.status == "error":
@@ -313,6 +318,96 @@ class PipelineService:
         if approved:
             await self.recs.commit()
         return counts
+
+    async def _deadline_approvals(self, world: World, forecasts: dict, open_recs: list) -> list:
+        """Dynamic deadline: a card nobody answered is approved once waiting one more tick would lose
+        more than DEADLINE_TOLERANCE_TICKS x the station's demand per tick (simulator copy).
+        Before sending it is re-checked against the current world and resized:
+        over fair share -> the fair share; low confidence -> a bridge amount; no longer needed -> expired."""
+        from app.pipeline.twin import Shipment, project
+
+        s, state = self.settings, self.state
+        pending = sorted((r for r in open_recs if r.status == RecommendationStatus.PENDING_APPROVAL), key=lambda r: r.tick)
+        state.deadlines = {k: v for k, v in state.deadlines.items() if k in {r.id for r in pending}}
+        if not pending:
+            return open_recs
+        dispatch_left = {d: float(dep.get("dispatch_capacity_per_tick") or 0) - world.dispatch_used(d) for d, dep in world.depots.items()}
+        for r in open_recs:
+            if r.status == RecommendationStatus.APPROVED:
+                dispatch_left[r.depot_id] = dispatch_left.get(r.depot_id, 0) - r.quantity
+        budgets = (state.planner_info or {}).get("budgets") or {}
+        changed = False
+        for rec in pending:
+            f = forecasts.get((rec.station_id, rec.fuel_type))
+            route = world.routes.get(rec.route_id)
+            if f is None or route is None:
+                continue
+            H = len(f.demand_path) or s.FORECAST_HORIZON_TICKS
+            path = f.demand_path or [f.rate_per_tick or 0.0] * H
+            demand = lambda st, fu, k, _p=path, _key=(rec.station_id, rec.fuel_type): (  # noqa: E731
+                _p[k] if (st, fu) == _key and k < len(_p) else 0.0)
+            L = int(route["transit_ticks"])
+            # tolerance: liters we give up for a human opinion = predicted demand per tick x
+            # (base + scale x (1 - confidence)); an unsure forecast buys the operator more time
+            confidence = f.confidence if f.confidence is not None else 1.0
+            ticks_allowed = s.DEADLINE_TOLERANCE_TICKS + s.DEADLINE_CONFIDENCE_SCALE * (1.0 - confidence)
+            tolerance = ticks_allowed * max(f.rate_per_tick or 0.0, 1.0)
+            # the tolerance is a budget for the whole wait: subtract what the station already lost
+            lost = sum(float(h.get("unmet_liters") or 0) for h in world.history
+                       if h.get("station_id") == rec.station_id and h.get("fuel_type") == rec.fuel_type
+                       and int(h.get("tick", -1)) >= rec.tick)
+            remaining = max(0.0, tolerance - lost)
+            costs = []
+            for d in range(0, max(1, H - L)):
+                proj = project(world, demand, H, [Shipment(d, rec.route_id, rec.fuel_type, rec.quantity)])
+                costs.append(proj.stations[(rec.station_id, rec.fuel_type)].unmet)
+                if costs[-1] - costs[0] > remaining:
+                    break
+            ttl_left = max(0, s.APPROVAL_TTL_TICKS - (world.tick - rec.tick))
+            if costs[-1] - costs[0] > remaining:  # waiting stops being worth it inside the horizon
+                wait_ticks = min(len(costs) - 2, ttl_left)
+            else:  # waiting is cheap for the whole horizon: only the hard cap applies
+                wait_ticks = ttl_left
+            created = rec.created_at if rec.created_at.tzinfo else rec.created_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - created).total_seconds()
+            free = len(costs) > 1 and costs[1] - costs[0] <= 0
+            tps = state.ticks_per_second
+            state.deadlines[rec.id] = {"tick": world.tick + wait_ticks,
+                                       "seconds": round(wait_ticks / tps, 1) if tps else None,
+                                       "tolerance_liters": round(tolerance), "lost_while_waiting": round(lost),
+                                       "confidence": round(confidence, 2)}
+            if wait_ticks > 0 or (free and age < s.MIN_REVIEW_SECONDS):
+                continue
+            # deadline reached: re-check and resize against the current world
+            if f.risk == "safe":
+                await self.recs.update(rec, {"status": RecommendationStatus.EXPIRED,
+                                             "error_message": "no longer needed at its deadline"}, commit=False)
+                changed = True
+                continue
+            reasons = " ".join(rec.reasons or [])
+            qty = rec.quantity
+            if "fair share" in reasons:
+                budget = budgets.get(f"{rec.station_id}:{rec.fuel_type}")
+                if budget is not None:
+                    qty = min(qty, max(s.MIN_SHIPMENT_LITERS, budget))
+            if "confidence" in reasons:
+                qty = min(qty, max(s.MIN_SHIPMENT_LITERS, sum(path[L:L + 8])))
+            depot_stock = float(world.depots[rec.depot_id]["inventory"].get(rec.fuel_type, 0))
+            room = f.capacity - f.inventory - f.incoming
+            qty = min(qty, float(route["max_shipment"]), depot_stock, dispatch_left.get(rec.depot_id, 0), room)
+            qty = float(int(qty // 100) * 100)
+            if qty < s.MIN_SHIPMENT_LITERS or route.get("status") != "AVAILABLE":
+                continue  # can't ship this tick; try again next tick
+            dispatch_left[rec.depot_id] -= qty
+            await self.recs.update(rec, {
+                "status": RecommendationStatus.APPROVED, "quantity": qty, "decision_mode": "auto-deadline",
+                "operator_note": f"auto-approved at tick {world.tick}: no answer before the deadline "
+                                 f"(waiting longer would lose > {tolerance:,.0f} L)"}, commit=False)
+            logger.info("Recommendation %s auto-approved at its deadline (tick %s, %s L)", rec.id, world.tick, qty)
+            changed = True
+        if changed:
+            await self.recs.commit()
+        return [r for r in open_recs if r.status in RecommendationStatus.OPEN]
 
     async def _expire_open(self, open_recs: list, tick: int, everything: bool = False) -> list:
         """Expires stale open recommendations; returns the ones still open."""

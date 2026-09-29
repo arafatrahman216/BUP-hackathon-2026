@@ -1,4 +1,5 @@
 import pytest
+from app.core.config import get_settings
 
 from app.pipeline.decide import RulePlanner
 from app.pipeline.predict import MovingAveragePredictor
@@ -215,3 +216,16 @@ async def test_expiry_needs_both_ticks_and_seconds(client, fake_sim, monkeypatch
     state = await run(client)
     statuses = [r["status"] for r in state["recommendations"]["recent"]]
     assert statuses.count("EXPIRED") == 1 and statuses.count("PENDING_APPROVAL") == 1  # replaced by a fresh one
+
+
+async def test_unanswered_urgent_card_auto_approves_at_its_deadline(client, fake_sim, monkeypatch):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # urgent -> operator card
+    state = await run(client)
+    assert state["recommendations"]["open"][0]["status"] == "PENDING_APPROVAL" and fake_sim.posts == []
+    monkeypatch.setattr(get_settings(), "DEADLINE_TOLERANCE_TICKS", 0.0)  # no loss allowed
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 0  # nobody answered; the tank ran dry
+    fake_sim.world["instance"]["tick"] = 101
+    state = await run(client)
+    rec = state["recommendations"]["recent"][0]
+    assert rec["decision_mode"] == "auto-deadline" and rec["status"] == "POSTED"
+    assert fake_sim.posts and fake_sim.posts[0]["destination_station_id"] == "station-mirpur"
