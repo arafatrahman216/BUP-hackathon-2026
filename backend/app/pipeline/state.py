@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.pipeline.types import Alert, Blocked, Forecast, World
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -41,6 +44,12 @@ class PipelineState:
     sim_error: str | None = None
     link: str = "starting"  # sse | polling | down
     recommendations: dict[str, list[dict[str, Any]]] = field(default_factory=lambda: {"open": [], "recent": []})
+    demand_model: Any = None  # app.pipeline.demand_model.DemandModel (learned online)
+    detector: Any = None  # app.pipeline.detect.Detector (alert history, CUSUM, incidents)
+    outlook: dict[str, Any] = field(default_factory=dict)  # network fuel left, rationing, depot overflow
+    planner_info: dict[str, Any] = field(default_factory=dict)
+    demo_data: bool = False  # true -> showing the hard-coded baseline world (simulator never reached)
+    _last_payload: dict[str, Any] | None = None  # last optimizer run: status, ms, budgets
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # decide/post vs operator actions
     run_lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # one pipeline run at a time
     _subscribers: set[asyncio.Queue] = field(default_factory=set)
@@ -67,6 +76,30 @@ class PipelineState:
 
     # --- dashboard payload ---
     def to_dashboard(self) -> dict[str, Any]:
+        """Never raises when DEMO_MASK_ERRORS is on: falls back to the last good payload, then to
+        the hard-coded baseline. Stage errors are shown as "fallback" (the log keeps the error)."""
+        from app.core.config import get_settings
+
+        if not get_settings().DEMO_MASK_ERRORS:
+            return self._build_dashboard()
+        try:
+            payload = self._build_dashboard()
+            for stage in payload["pipeline"]["stages"]:
+                if stage.get("status") == "error":
+                    stage["status"], stage["detail"] = "fallback", "using backup data"
+            if payload["sim"].get("error"):
+                payload["sim"]["error"] = "Simulator not responding: showing the last known data"
+            self._last_payload = payload
+            return payload
+        except Exception as exc:
+            logger.error("ERROR MASKED in dashboard payload: %s: %s", type(exc).__name__, exc, exc_info=exc)
+            if self._last_payload is not None:
+                return self._last_payload
+            from app.pipeline.demo_data import demo_dashboard
+
+            return demo_dashboard()
+
+    def _build_dashboard(self) -> dict[str, Any]:
         w = self.world
         age = round(time.time() - self.world_read_at, 1) if self.world_read_at else None
         payload: dict[str, Any] = {
@@ -75,12 +108,16 @@ class PipelineState:
                 "stale": (w.stale if w else True) or not self.sim_connected, "data_age_seconds": age,
                 "tick": w.tick if w else None, "sim_time": w.instance.get("sim_time") if w else None,
                 "status": w.instance.get("status") if w else None, "tick_minutes": w.tick_minutes if w else None,
+                "demo": self.demo_data,
             },
             "pipeline": {
                 "acting": self.acting, "cautious": self.cautious, "runs": self.runs, "last_run": self.last_run,
                 "stages": [s.__dict__ for s in self.stages], "validation_issues": self.validation_issues,
             },
             "alerts": [a.to_dict() for a in self.alerts],
+            "incidents": list(reversed(self.detector.incidents[-10:])) if self.detector else [],
+            "outlook": {**self.outlook, "planner": self.planner_info,
+                        "wasted_liters_observed": self.detector.wasted if self.detector else {}},
             "blocked": [b.__dict__ for b in self.blocked],
             "recommendations": self.recommendations,
             "stations": [], "depots": [], "routes": [], "supply": [], "events": [], "allocations": [], "metrics": {},

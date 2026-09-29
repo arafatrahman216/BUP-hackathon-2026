@@ -54,6 +54,9 @@ class Snapshot:
     blocked: list[Blocked] = field(default_factory=list)
     source: str = "pipeline_cache"  # pipeline_cache | live
     age_seconds: float | None = None
+    outlook: dict[str, Any] = field(default_factory=dict)  # predictor: network fuel left, rationing, depot overflow
+    planner_info: dict[str, Any] = field(default_factory=dict)  # last planner run: name, status, budgets
+    incidents: list[dict[str, Any]] = field(default_factory=list)  # detector: grouped alerts
 
 
 @dataclass

@@ -95,9 +95,17 @@ def _event_touches(event: dict[str, Any], world: World, plan: Plan) -> bool:
     return any(not params[k] or filters[k] in params[k] for k in present)
 
 
-def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool) -> list[str]:
-    """Why a plan needs the operator. Empty list -> it may be auto-posted."""
+def importance_reasons(plan: Plan, world: World, auto_post_enabled: bool, *,
+                       min_confidence: float = 0.0, rationing: bool = False) -> list[str]:
+    """Why a plan needs the operator. Empty list -> it may be auto-posted.
+
+    Rationing is approved at the policy level: shipments inside a station's fair-share budget
+    stay automatic; only over-budget ones need the operator."""
     reasons = []
+    if plan.confidence is not None and plan.confidence < min_confidence:
+        reasons.append(f"low forecast confidence ({plan.confidence:.2f})")
+    if rationing and plan.over_budget:
+        reasons.append("rationing: more than this station's fair share")
     if plan.risk == "urgent":
         reasons.append("urgent: station may run dry before the truck arrives")
     route = world.routes[plan.route_id]

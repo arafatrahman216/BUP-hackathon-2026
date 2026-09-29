@@ -45,7 +45,7 @@ def build_pipeline_service(session: AsyncSession, sim: SimulatorRepository, stat
     recs = RecommendationRepository(session)
     return PipelineService(
         sim, SnapshotRepository(session), recs, RecommendationService(recs, sim, state, settings), state, settings,
-        predictor=pipeline.build_predictor(settings),
+        predictor=pipeline.build_predictor(settings, state),
         planner=pipeline.build_planner(settings),
         fallback_planner=pipeline.build_fallback_planner(settings),
         explainer=pipeline.build_explainer(settings),
@@ -68,4 +68,4 @@ def get_stream_service(state: State) -> DashboardService:
 def get_explain_service(session: DbSession, sim: Simulator, state: State, llm: LLM) -> ExplainService:
     settings = get_settings()
     return ExplainService(sim, RecommendationRepository(session), ActionQuestionRepository(session), state, llm,
-                          pipeline.build_predictor(settings), settings)
+                          pipeline.build_predictor(settings, state), settings)

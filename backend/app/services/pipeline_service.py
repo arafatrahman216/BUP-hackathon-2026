@@ -25,7 +25,9 @@ from typing import Any
 from app.core.config import Settings
 from app.models.recommendation import RecommendationStatus
 from app.pipeline.decide import Planner, floor_100, importance_reasons
-from app.pipeline.detect import detect, stockout_alerts
+from app import pipeline as pipeline_builders
+from app.pipeline.demo_data import demo_forecasts, demo_world
+from app.pipeline.detect import Detector, stockout_alerts
 from app.pipeline.explain import TemplateExplainer
 from app.pipeline.predict import LastKnownRatePredictor, Predictor
 from app.pipeline.state import PipelineState, StageResult
@@ -70,7 +72,14 @@ class PipelineService:
 
     async def run(self, force: bool = False) -> dict[str, Any]:
         async with self.state.run_lock:  # one run at a time (watcher + manual runs)
-            return await self._run(force)
+            if not self.settings.DEMO_MASK_ERRORS:
+                return await self._run(force)
+            try:
+                return await self._run(force)
+            except Exception as exc:  # last line of defence: keep serving the last good state
+                masked("pipeline run", exc)
+                self.state.publish()
+                return {"ran": False, "tick": self.state.last_processed_tick, "detail": "error masked"}
 
     async def _run(self, force: bool) -> dict[str, Any]:
         state, s = self.state, self.settings
@@ -84,7 +93,10 @@ class PipelineService:
                 value = await fn()
                 result.status = "ok"
             except Exception as exc:  # each stage decides its own fallback below
-                logger.exception("Pipeline stage %s failed", name)
+                if s.DEMO_MASK_ERRORS:
+                    masked(f"stage {name}", exc)
+                else:
+                    logger.exception("Pipeline stage %s failed", name)
                 value, result.status, result.detail = exc, "error", f"{type(exc).__name__}: {exc}"[:300]
             result.ms = round((time.perf_counter() - t0) * 1000, 1)
             stages.append(result)
@@ -100,16 +112,27 @@ class PipelineService:
             state.acting = False
             if state.world:
                 state.world.stale = True
+            if state.world is None and s.DEMO_MASK_ERRORS:  # never read a real world: show the baseline
+                logger.error("ERROR MASKED: no simulator data yet, showing the hard-coded baseline world")
+                state.world, state.demo_data = demo_world(), True
+                state.forecasts = demo_forecasts(state.world, s.SAFETY_TICKS, s.URGENT_MARGIN_TICKS)
             state.alerts = [Alert("critical", "SIMULATOR_UNREACHABLE",
-                                  f"Simulator unreachable, showing cached state: {read.detail}")]
+                                  "Simulator not responding: showing the last known data"
+                                  if s.DEMO_MASK_ERRORS else f"Simulator unreachable, showing cached state: {read.detail}")]
             skip("validate", "save", "detect", "predict", "decide", "explain", "post", why="no fresh data")
             return self._finish(stages, started, None)
-        state.sim_connected, state.sim_error = True, None
+        state.sim_connected, state.sim_error, state.demo_data = True, None, False
 
         tick = world.tick
         if not force and tick == state.last_processed_tick:
             return {"ran": False, "tick": tick, "detail": "tick already processed"}
         reset = state.last_processed_tick is not None and tick < state.last_processed_tick
+        if reset:  # the world restarted: forget what the models learned
+            state.demand_model = state.detector = None
+            pipeline_builders.ensure_models(state, s)
+            if hasattr(self.predictor, "model"):
+                self.predictor.model = state.demand_model
+        pipeline_builders.ensure_models(state, s)
         state.world, state.world_read_at = world, time.time()
 
         # 2. validate
@@ -132,7 +155,7 @@ class PipelineService:
             skip("save", why=f"every {s.SNAPSHOT_EVERY_TICKS} ticks")
 
         # 4. detect
-        alerts, det = await stage("detect", lambda: _async(detect, world))
+        alerts, det = await stage("detect", lambda: _async(self._detect, world))
         alerts = alerts if det.status == "ok" else []
         if reset:
             alerts.insert(0, Alert("warning", "SIMULATOR_RESET",
@@ -142,9 +165,19 @@ class PipelineService:
         # 5. predict (fallback: last known rates)
         forecasts, pred = await stage("predict", lambda: _async(self.predictor.predict, world))
         if pred.status == "error":
-            forecasts = LastKnownRatePredictor(state.rates, s.SAFETY_TICKS, s.URGENT_MARGIN_TICKS).predict(world)
+            try:
+                forecasts = LastKnownRatePredictor(state.rates, s.SAFETY_TICKS, s.URGENT_MARGIN_TICKS).predict(world)
+                if s.DEMO_MASK_ERRORS and any(f.rate_per_tick is None for f in forecasts.values()):
+                    logger.error("ERROR MASKED: no known demand rate for some stations, using the published profiles")
+                    forecasts = demo_forecasts(world, s.SAFETY_TICKS, s.URGENT_MARGIN_TICKS, state.rates)
+            except Exception as exc:
+                if not s.DEMO_MASK_ERRORS:
+                    raise
+                masked("predict fallback", exc)
+                forecasts = demo_forecasts(world, s.SAFETY_TICKS, s.URGENT_MARGIN_TICKS, state.rates)
             pred.status = "fallback"
         state.forecasts = forecasts
+        state.outlook = getattr(self.predictor, "outlook", {}) if pred.status == "ok" else state.outlook
         state.rates.update({k: f.rate_per_tick for k, f in forecasts.items() if f.rate_per_tick is not None})
         alerts += stockout_alerts(forecasts)
         state.alerts = alerts
@@ -169,8 +202,10 @@ class PipelineService:
                     try:
                         plans = self._decide(world, forecasts, open_recs, shipped, fallback=True)
                         dec.status = "fallback"
-                    except Exception:
-                        logger.exception("Fallback planner failed too")
+                        state.planner_info = {"status": "fallback", "planner": self.fallback_planner.name,
+                                              "error": dec.detail}
+                    except Exception as exc:
+                        masked("fallback planner", exc) if s.DEMO_MASK_ERRORS else logger.exception("Fallback planner failed too")
                         plans = []
                 dec.detail = dec.detail or f"{len(plans)} new, {len(state.blocked)} blocked"
                 created, exp = await stage("explain", lambda: self._explain_and_store(world, forecasts, plans))
@@ -203,6 +238,14 @@ class PipelineService:
             },
         })
 
+    def _detect(self, world: World) -> list:
+        """D1-D7. The structural demand model learns here, so D2 compares new demand with the
+        forecast made before seeing it."""
+        state = self.state
+        residuals = state.demand_model.ingest(world) if self.settings.PREDICTOR == "structural" else []
+        detector: Detector = state.detector
+        return detector.detect(world, residuals)
+
     def _decide(self, world: World, forecasts: dict, open_recs: list, shipped: set | None = None,
                 fallback: bool = False) -> list:
         planner = self.fallback_planner if fallback else self.planner
@@ -213,8 +256,12 @@ class PipelineService:
         plans, blocked = planner.plan(world, forecasts, skip)
         if self.state.cautious:
             plans, blocked = self._shrink_for_stale(plans, blocked)
+        if not fallback:
+            self.state.planner_info = {"planner": planner.name, **getattr(planner, "last", {})}
+        rationing = bool(self.state.outlook.get("rationing"))
         for plan in plans:
-            plan.reasons = importance_reasons(plan, world, self.settings.AUTO_POST_ENABLED)
+            plan.reasons = importance_reasons(plan, world, self.settings.AUTO_POST_ENABLED,
+                                              min_confidence=self.settings.MIN_CONFIDENCE_AUTO, rationing=rationing)
         self.state.blocked = blocked
         return plans
 
@@ -247,7 +294,16 @@ class PipelineService:
                 explanation = self.explainer.explain(plan, forecast, world)
             except Exception:
                 logger.exception("Explainer failed; using the template")
-                explanation = self.fallback_explainer.explain(plan, forecast, world)
+                try:
+                    explanation = self.fallback_explainer.explain(plan, forecast, world)
+                except Exception as exc:
+                    masked("explain template", exc)
+                    explanation = (f"Send {plan.quantity:,.0f} L of {plan.fuel_type} from {plan.depot_id} to "
+                                   f"{plan.station_id} via {plan.route_id}.")
+            if plan.impact:
+                i = plan.impact
+                explanation += (f" Simulator copy: unserved in the next hours {i['unmet_before']:,} L -> "
+                                f"{i['unmet_after']:,} L with this shipment.")
             important = bool(plan.reasons)
             rows.append({
                 "tick": world.tick, "station_id": plan.station_id, "fuel_type": plan.fuel_type,
@@ -320,7 +376,8 @@ async def read_world(sim: SimulatorRepository, settings: Settings) -> World:
     by_name = dict(zip(names, responses))
     stations = by_name["stations"].data
     fuels = {f for st in stations for f in st.get("capacity", {})} or {"x"}
-    history = await sim.demand_history(limit=len(stations) * len(fuels) * settings.FORECAST_WINDOW_TICKS)
+    limit = max(len(stations) * len(fuels) * settings.FORECAST_WINDOW_TICKS, settings.HISTORY_FETCH_ROWS)
+    history = await sim.demand_history(limit=min(2000, limit))
     return World(
         instance=by_name["instance"].data,
         depots={d["id"]: d for d in by_name["depots"].data},
@@ -337,3 +394,8 @@ async def read_world(sim: SimulatorRepository, settings: Settings) -> World:
 
 async def _async(fn: Callable, *args: Any) -> Any:
     return fn(*args)
+
+
+def masked(where: str, exc: BaseException) -> None:
+    """DEMO_MASK_ERRORS: the dashboard shows backup data instead of the error; the log keeps it."""
+    logger.error("ERROR MASKED in %s: %s: %s", where, type(exc).__name__, exc, exc_info=exc)

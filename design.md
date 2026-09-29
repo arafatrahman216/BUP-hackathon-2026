@@ -14,7 +14,7 @@ Feature requirements live in [features.md](features.md).
 | Layer    | Choice |
 |----------|--------|
 | Backend  | Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0 (async) |
-| Database | Supabase Postgres (via `asyncpg`, session pooler) |
+| Database | Local Postgres 16 container (`db` in docker-compose, via `asyncpg`); Supabase Postgres still possible |
 | Files    | Supabase Storage (REST API via `httpx`), as a repository with no routes |
 | AI       | Gemini, Groq, OmniRoute behind one `LLMClient` with an env-configured fallback chain |
 | Frontend | React 19 + Vite operator dashboard (`frontend/`), live via the backend's SSE |
@@ -60,7 +60,7 @@ Routes: `GET /health`, the `/ai` endpoints, the pipeline/dashboard endpoints,
 | `utils/` | `logger.py` (logging with request ids), `pagination.py` (`page_params` dependency + `build_page` → `Page[T]`). | Framework-agnostic helpers. |
 | `ai/` | Provider-agnostic LLM module (see §4). | |
 | `explainability/` | LLM explanations (see §7b): `types.py` (`Subject`, `Snapshot`, `MetricContext`), `metrics.py` (`@metric` registry + built-in metrics over the pipeline's World/Forecast/Alert), `profiles.json` (**which metrics each question type sends to the LLM, params, suggested questions**), `context.py` (load profiles, build the JSON context), `prompt.py` (system prompt + messages). | Metrics are pure (no I/O) and never recompute detect/predict; `ExplainService` does the I/O. |
-| `pipeline/` | Tick pipeline stages (see §7a): `types.py` (World, Forecast, Plan, Alert), `validate.py`, `detect.py`, `predict.py`, `decide.py`, `explain.py`, `state.py` (in-memory cache + SSE broadcaster), `watcher.py` (SSE listener + polling fallback), `__init__.py` (stage builders: **swap in a model here**). | Stages are pure (no I/O); `PipelineService` does the I/O. |
+| `pipeline/` | Tick pipeline stages (see §7a): `types.py` (World, Forecast, Plan, Alert), `validate.py`, `detect.py` (stateful `Detector`, D1-D7), `demand_model.py` (structural demand model), `twin.py` (deterministic simulator copy + network outlook), `predict.py` (`StructuralPredictor`; baseline `MovingAveragePredictor`), `optimizer.py` (strategic LP + tactical MIP-MPC), `decide.py` (`RulePlanner` baseline/fallback, approval reasons), `explain.py`, `state.py` (in-memory cache + SSE broadcaster), `watcher.py` (SSE listener + polling fallback), `__init__.py` (stage builders: **swap in a model here**). | Stages are pure (no I/O); `PipelineService` does the I/O. |
 
 `backend/tests/`: pytest suite with fake AI providers, a mocked Supabase Storage API, and
 a throwaway SQLite database. Run it with `cd backend && .venv/bin/pytest`.
@@ -98,13 +98,22 @@ HTTP → CORS → RequestLogging → CatchAllError → RateLimit → controller
 Successful responses are the plain resource (no envelope). Paginated lists use `Page[T]`:
 `{items, total, page, page_size, pages}`.
 
-### 3.4 Database (Supabase)
+### 3.4 Database (local Postgres)
 
-- The DB URL is built from `SUPABASE_URL` (project ref) + `SUPABASE_PASSWORD`.
-- `SUPABASE_POOLER_HOST` set → connects to the **session pooler** as `postgres.<ref>` (IPv4). Empty → direct `db.<ref>.supabase.co` (IPv6-only: won't work from Docker or most home networks).
-- `DATABASE_URL` set → overrides everything (tests use SQLite; handy for offline work).
-- Tables are created on startup with `Base.metadata.create_all`. There are no migrations, so changing an existing column means altering it by hand in the Supabase SQL editor (or dropping the table in dev).
-- Small connection pool (5 + 5 overflow), because the pooler caps connections per project.
+- **Default:** the `db` service in `docker-compose.yml` (`postgres:16-alpine`, data in the `pgdata` volume).
+  Compose sets the backend's `DATABASE_URL` to `postgresql+asyncpg://fuel:fuel@db:5432/fuel`, overriding
+  `backend/.env`. Credentials/port come from `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` /
+  `POSTGRES_PORT` (defaults `fuel` / `fuel` / `fuel` / `5432`).
+- Backend on the host (uvicorn outside Docker): `docker compose up -d db`, and `backend/.env` has
+  `DATABASE_URL=postgresql+asyncpg://fuel:fuel@localhost:5432/fuel`.
+- **Supabase (optional):** leave `DATABASE_URL` empty and the URL is built from `SUPABASE_URL` + `SUPABASE_PASSWORD`
+  (`SUPABASE_POOLER_HOST` set → session pooler as `postgres.<ref>`, IPv4; empty → direct `db.<ref>.supabase.co`, IPv6-only).
+- Tests use SQLite (`DATABASE_URL=sqlite+aiosqlite:///...`).
+- `DB_COMMAND_TIMEOUT_SECONDS` (default 10) is asyncpg's query timeout: a query on a dead connection fails instead of
+  hanging forever. `pool_recycle=300` replaces idle connections. Pool is 5 + 5 overflow.
+- Tables are created on startup with `Base.metadata.create_all`. There are no migrations, so changing an existing column
+  means altering it by hand (`docker compose exec db psql -U fuel -d fuel`) or dropping the table in dev
+  (`docker compose down -v` wipes the whole database).
 - Repositories commit their own writes: `add`/`setattr` → `await session.commit()` → `await session.refresh(obj)`. For multi-step atomic work, `flush()` in the repository and commit once in the service.
 
 ### 3.5 File storage (Supabase Storage)
@@ -217,11 +226,12 @@ Not implemented yet: streaming responses, tool/function calling.
 ## 6. Running
 
 ```bash
-docker compose up --build        # backend :8000 (docs at /docs)
+docker compose up --build        # db :5432, backend :8001 (docs at /docs), frontend :5173
 
 # or locally
+docker compose up -d db          # local Postgres for a host-run backend
 cd backend && python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/uvicorn app.main:app --reload
+.venv/bin/uvicorn app.main:app --port 8001 --reload
 .venv/bin/pytest
 ```
 
@@ -328,8 +338,12 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | Database | **Supabase** Postgres, URL built from `SUPABASE_*` vars; session pooler because the direct host is IPv6-only | User requirement; must work from Docker |
 | 2026-09-29 | Storage | Supabase Storage through `StorageRepository` (REST), service-role key server-side only, no routes by default | Ready for features that need uploads; keeps secrets off the client |
 | 2026-09-29 | Template | **No demo resources** (no Items/Files APIs); only health + AI routes | User requirement: leftover demo files and routers could cause bugs in the real project |
-| 2026-09-29 | DevOps | Docker Compose with source mounts + hot reload; no local DB container | One command to run everything; DB is hosted |
+| 2026-09-29 | DevOps | Docker Compose with source mounts + hot reload | One command to run everything |
 | 2026-09-29 | Scope | **No frontend**: the project is backend-only | User decision for the BUP Fuel Supply Simulator challenge |
+| 2026-09-29 | Intelligence | Detect: data/clock checks, state diffs + events, z-score + CUSUM on actual ÷ forecast, inventory reconciliation, single-route risk, incidents, bottlenecks (intelligence-plan.md §0.1) | Covers brief §7/§10/§11; rules are exact, CUSUM catches sustained spikes |
+| 2026-09-29 | Intelligence | Demand forecast = one structural model (guide prior + EWMA per station × fuel × hour × live multiplier, shape shared across fuels); other models only as bench benchmarks | Demand formula is published and noise is ~2% over 6 h, so a mix/ensemble adds cost, not accuracy |
+| 2026-09-29 | Intelligence | Stockout risk and impact from a deterministic copy of the simulator; risk % by normal approximation; Monte Carlo optional | One engine powers P2–P7; Monte Carlo barely changes results at this noise level |
+| 2026-09-29 | Intelligence | Decide = strategic daily LP (rationing across days) + tactical MIP-MPC (6 h) with lexicographic goals (unserved → waste → balance → short roads); fallback priority greedy + reorder point | Fuel is finite after tick 212, so waste and cross-day distribution decide the score |
 | 2026-09-29 | Data | `simulator/collect_dataset.py` (stdlib only) builds CSV datasets from every simulator GET endpoint; `step` mode (pause + `/admin/step`) is the default way to get gap-free, deterministic data; output in gitignored `simulator/dataset/` | `demand-history` only returns the newest 2,000 rows, so data must be pulled while the sim runs |
 | 2026-09-29 | Scope | **Frontend added**: React operator dashboard in `frontend/` (supersedes "no frontend") | User request: operator must observe and approve |
 | 2026-09-29 | Pipeline | Stages are pure functions/classes in `app/pipeline/`; `PipelineService` does the I/O; each stage has a fallback and reports ok/fallback/skipped/error | Model/solution can replace predictor/planner/explainer without touching I/O; resilience is visible |
@@ -352,3 +366,11 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | AI | "Ask AI" per recommendation in the approval queue and decision log; every Q&A is stored in `action_questions` with the exact context sent | Audit trail of what the operator was told and why; reload shows earlier answers |
 | 2026-09-29 | AI | Default Gemini model `gemini-3.8-flash` | Best accuracy and latency of 2.5 Flash / 3.8 Flash / 3.1 Pro on six operator questions; not a preview |
 | 2026-09-29 | AI | Suggested questions per recommendation status live in `profiles.json` | Tunable without code, next to the metrics they rely on |
+| 2026-09-29 | Database | **Switched to a local Postgres 16 container** (`db` service, `pgdata` volume); Supabase Postgres kept as an option (empty `DATABASE_URL`); Supabase Storage unchanged | Supabase round-trips (~100 ms+) made pipeline runs take ~1.3 s, and a half-open pooler connection hung the pipeline and blocked approvals. Local: ~60 ms per run, ~60 ms per approval |
+| 2026-09-29 | Database | asyncpg `command_timeout` (`DB_COMMAND_TIMEOUT_SECONDS`, 10 s) + `pool_recycle=300` | A dead connection must fail fast, never hang a run that holds the pipeline lock |
+| 2026-09-29 | Intelligence | MIP/LP with **PuLP 2.x + HiGHS** (`highspy`), CBC as the backup solver; `PLANNER`/`PREDICTOR` settings pick optimizer/structural (default) or the rule baselines; the stateful demand model and detector live in `PipelineState` | PuLP 4 changed its API and dropped the bundled CBC; HiGHS solves the 6 h MIP in ~0.1-0.4 s |
+| 2026-09-29 | Intelligence | Rationing is approved at the policy level: shipments within a station's fair-share budget auto-post; over-budget, low-confidence, urgent, backup-road or active-crisis shipments need the operator | User decision; per-shipment approval would make almost everything manual after tick 212 |
+| 2026-09-29 | Intelligence | Strategic layer is a single-window LP (max-min fair coverage over the remaining days of fuel), not daily buckets yet | User decision to fit the 1-hour build; daily buckets are the next step |
+| 2026-09-29 | Intelligence | MIP uses whole trucks (binary, min size) on every tick plus a soft 4-tick safety buffer | Without it the MIP trickled 62 L per tick just in time and never kept a buffer |
+| 2026-09-29 | Resilience | `DEMO_MASK_ERRORS=true` (default): stage errors show as "fallback", raw exception text is replaced, predict falls back to known rates then the published profiles, a never-reached simulator shows the hard-coded baseline world (`pipeline/demo_data.py`, never posted from), the dashboard payload falls back to the last good one; every mask logs `ERROR MASKED ...` with the traceback | User requirement: no error may reach the frontend during the demo; the log keeps the evidence |
+| 2026-09-29 | Intelligence | Demand noise is uniform ±profile noise (measured: ratios 0.900-1.100), so the error floor is noise/√3; past demand is de-spiked by event windows, including RESOLVED spikes | Measured on simulator/dataset; the old floor overstated risk 1.7×, and resolved spikes leaked into the base rate after a restart |

@@ -9,9 +9,25 @@
   "profiles": {
     "recommendation": {
       "description": "Questions about one recommendation (approval queue and decision log).",
-      "metrics": ["clock", "action", "forecast", "risk_rules", "station", "demand", "incoming_shipments",
-                  "depot", "depot_commitments", "depot_stations", "routes", "events", "alerts", "supply"],
-      "instructions": "Answer about the decision in `action`: why this station and fuel, why now, why this depot, route and quantity, why it needed (or did not need) the operator, and what its current status means. For what-if questions (other quantity, waiting, rejecting), calculate the effect with `forecast`, `demand` and `depot_stations`.",
+      "metrics": [
+        "clock",
+        "action",
+        "allocation",
+        "forecast",
+        "risk_rules",
+        "station",
+        "demand",
+        "incoming_shipments",
+        "depot",
+        "depot_commitments",
+        "depot_stations",
+        "routes",
+        "events",
+        "alerts",
+        "supply",
+        "outlook"
+      ],
+      "instructions": "Answer about the decision in `action`: why this station and fuel, why now, why this depot, route and quantity, why it needed (or did not need) the operator, and what its current status means. If it was sent, use `allocation` for what happened to the truck. For what-if questions (other quantity, waiting, rejecting, a road closing), calculate the effect with `forecast` (including `demand_next_ticks_l`, `p_stockout`, `expected_unmet_next_horizon_l`), `demand`, `routes` and `depot_stations`.",
       "suggested_questions": {
         "PENDING_APPROVAL": [
           "Why does this need my approval?",
@@ -48,19 +64,50 @@
     },
     "station": {
       "description": "What is happening at a station, and is it at risk of running dry?",
-      "metrics": ["clock", "station", "forecast", "risk_rules", "demand", "incoming_shipments", "recent_allocations",
-                  "open_recommendations", "routes", "events", "alerts"],
+      "metrics": [
+        "clock",
+        "station",
+        "forecast",
+        "risk_rules",
+        "demand",
+        "incoming_shipments",
+        "recent_allocations",
+        "open_recommendations",
+        "routes",
+        "events",
+        "alerts",
+        "outlook"
+      ],
       "instructions": "Describe the station's fuel situation: how long its stock lasts (average and trend), what is on the way or planned, why the system has or has not acted (use `risk_rules.this_station`), and anything that could make it worse."
     },
     "depot": {
       "description": "What is the state of a depot and its supply?",
-      "metrics": ["clock", "depot", "depot_commitments", "depot_stations", "supply", "events", "alerts"],
+      "metrics": [
+        "clock",
+        "depot",
+        "depot_commitments",
+        "depot_stations",
+        "supply",
+        "events",
+        "alerts"
+      ],
       "instructions": "Describe the depot's stock after open commitments, the demand of the stations it serves, dispatch capacity, incoming ships and crises. Say how many ticks the stock lasts for the stations it serves when asked."
     },
     "general": {
       "description": "Network-wide questions.",
-      "metrics": ["clock", "network", "network_overview", "station_ranking", "open_recommendations", "alerts",
-                  "events", "supply"],
+      "metrics": [
+        "clock",
+        "network",
+        "network_overview",
+        "station_ranking",
+        "open_recommendations",
+        "incidents",
+        "alerts",
+        "events",
+        "supply",
+        "outlook",
+        "planner"
+      ],
       "instructions": "Answer about the network as a whole; use `station_ranking` for which stations are closest to running dry."
     }
   }

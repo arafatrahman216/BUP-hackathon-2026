@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/d3@7.9.0/dist/d3.min.js" integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/topojson-client@3.1.0/dist/topojson-client.min.js" integrity="sha384-Ukv1p/xTma6P4/2bY5KzWBw+ydSpXmhCMtyciIQVDJ1RmOxtCYNMF1uXT9T63H67" crossorigin="anonymous"></script>
+<style>
+body{margin:0;background:#f5f6f8}
+*{box-sizing:border-box}
+a{color:oklch(0.52 0.12 250);text-decoration:none}
+a:hover{text-decoration:underline}
+[data-theme="light"]{--bg:#f5f6f8;--surface:#ffffff;--soft:#eef0f3;--ink:#1b2130;--muted:#4a5263;--faint:#6b7282;--line:#e3e6eb;--accent:oklch(0.53 0.12 250);--accentInk:#ffffff;--hover:oklch(0.97 0.012 250);--hoverLine:oklch(0.84 0.05 250);--water:oklch(0.965 0.018 235);--land:#ffffff;--land2:#f0f1f4;--landLine:#d3d8df;--road:oklch(0.72 0.04 250);--shadow:0 1px 2px rgba(20,30,50,.04),0 4px 14px rgba(20,30,50,.04);--scrim:rgba(30,38,55,.28)}
+[data-theme="dark"]{--bg:#12151b;--surface:#1a1e26;--soft:#252a35;--ink:#e9ebf0;--muted:#b6bcc8;--faint:#959cab;--line:#2d3340;--accent:oklch(0.7 0.11 250);--accentInk:#10141b;--hover:oklch(0.26 0.03 250);--hoverLine:oklch(0.45 0.07 250);--water:oklch(0.22 0.025 245);--land:#232834;--land2:#1c2029;--landLine:#363d4b;--road:oklch(0.55 0.05 250);--shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);--scrim:rgba(0,0,0,.5)}
+[data-theme]{--low:oklch(0.6 0.17 27);--mid:oklch(0.77 0.14 82);--good:oklch(0.63 0.13 152);--urgent:oklch(0.6 0.17 27);--watch:oklch(0.77 0.14 82);--plan:oklch(0.58 0.11 295);--safe:oklch(0.63 0.13 152)}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased">
+
+  <nav style="position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;flex-wrap:wrap;gap:12px 28px;padding:14px 32px;white-space:nowrap">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="width:30px;height:30px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accentInk);font-weight:600;font-size:15px">F</div>
+      <span style="font-size:19px;font-weight:600;letter-spacing:-0.01em">Fuel Ops</span>
+      <span style="font-size:12px;font-weight:500;letter-spacing:.06em;color:var(--muted);padding:3px 8px;border:1px solid var(--line);border-radius:6px">SIMULATED NETWORK</span>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:10px;padding:5px 6px 5px 14px;border-radius:9px;background:var(--soft)">
+      <span style="font-size:16px;font-weight:600;font-variant-numeric:tabular-nums">{{ clock }}</span>
+      <button onClick="{{ togglePlay }}" style="font:inherit;font-size:13px;font-weight:500;padding:4px 12px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="border-color:var(--hoverLine);background:var(--hover)">{{ playLabel }}</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted)">
+      <span style="width:8px;height:8px;border-radius:50%;background:{{ health.c }}"></span>{{ health.text }}
+    </div>
+    <button onClick="{{ toggleTheme }}" style="font:inherit;font-size:14px;font-weight:500;padding:6px 14px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="border-color:var(--hoverLine);background:var(--hover)">{{ themeLabel }}</button>
+  </nav>
+
+  <div style="padding:28px 32px 0;display:flex;flex-direction:column;gap:20px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px 24px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <h1 style="margin:0;font-size:26px;font-weight:600;letter-spacing:-0.02em">Operations</h1>
+        <span style="font-size:16px;color:var(--muted)">Dhaka and Chattogram fuel network</span>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px">
+      <sc-for list="{{ incidents }}" as="inc" hint-placeholder-count="2">
+        <div style="display:flex;align-items:flex-start;gap:14px;padding:16px 20px;border-radius:12px;background:var(--surface);border:1.5px solid var(--ink)">
+          <span style="width:14px;height:14px;border-radius:50%;background:{{ inc.c }};margin-top:5px;flex-shrink:0"></span>
+          <div style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+              <span style="font-size:17px;font-weight:600">{{ inc.title }}</span>
+              <span style="font-size:15px;font-weight:600;white-space:nowrap">{{ inc.when }}</span>
+            </div>
+            <span style="font-size:15px;color:var(--muted)">{{ inc.detail }}</span>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{ simDown }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:12px 18px;border-radius:12px;border:1px solid var(--line);background:var(--surface);display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:15px">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--urgent)"></span>
+        <span style="font-weight:600">Simulator not responding</span>
+        <span style="color:var(--muted)">Showing data from 13:28 · retrying · autopilot paused</span>
+      </div>
+    </sc-if>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px">
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:16px 20px;display:flex;flex-direction:column;gap:4px">
+        <span style="font-size:15px;font-weight:500;color:var(--muted)">Mode</span>
+        <span style="display:flex;align-items:center;gap:8px;font-size:22px;font-weight:600"><span style="width:10px;height:10px;border-radius:50%;background:{{ mode.c }}"></span>{{ mode.label }}</span>
+        <span style="font-size:14px;color:var(--faint)">{{ mode.reason }}</span>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:16px 20px;display:flex;flex-direction:column;gap:4px">
+        <span style="font-size:15px;font-weight:500;color:var(--muted)">Service level</span>
+        <span style="font-size:22px;font-weight:600">96.4%</span>
+        <span style="font-size:14px;color:var(--faint)">+15.2 pts vs no action</span>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:16px 20px;display:flex;flex-direction:column;gap:4px">
+        <span style="font-size:15px;font-weight:500;color:var(--muted)">Trucks on the road</span>
+        <span style="font-size:22px;font-weight:600">{{ trucks }}</span>
+        <span style="font-size:14px;color:var(--faint)">{{ queueCount }}</span>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:16px 20px;display:flex;flex-direction:column;gap:4px">
+        <span style="font-size:15px;font-weight:500;color:var(--muted)">Autopilot</span>
+        <div style="display:flex;align-items:center;gap:12px;height:33px">
+          <div onClick="{{ toggleAuto }}" style="width:40px;height:23px;border-radius:999px;background:{{ auto.track }};position:relative;cursor:pointer;transition:background .15s">
+            <div style="position:absolute;top:3px;left:{{ auto.knob }};width:17px;height:17px;border-radius:50%;background:#ffffff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .15s"></div>
+          </div>
+          <span style="font-size:18px;font-weight:600">{{ auto.state }}</span>
+        </div>
+        <span style="font-size:14px;color:var(--faint)">{{ auto.label }}</span>
+      </div>
+    </div>
+  </div>
+
+  <main style="display:flex;flex-wrap:wrap;gap:24px;padding:24px 32px 48px;align-items:stretch">
+
+    <section style="flex:1.5 1 580px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:22px;display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <h2 style="margin:0;font-size:20px;font-weight:600">Network</h2>
+        <div style="display:flex;padding:3px;border-radius:9px;background:var(--soft);gap:2px;white-space:nowrap;flex-shrink:0">
+          <button onClick="{{ showMap }}" style="font:inherit;font-size:14px;font-weight:500;padding:5px 14px;border-radius:7px;border:none;cursor:pointer;background:{{ tabMap.bg }};color:{{ tabMap.fg }};box-shadow:{{ tabMap.sh }}">Map</button>
+          <button onClick="{{ showTable }}" style="font:inherit;font-size:14px;font-weight:500;padding:5px 14px;border-radius:7px;border:none;cursor:pointer;background:{{ tabTable.bg }};color:{{ tabTable.fg }};box-shadow:{{ tabTable.sh }}">All states</button>
+        </div>
+      </div>
+
+      <sc-if value="{{ isMap }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:14px">
+          <div ref="{{ mapRef }}" onMouseDown="{{ panStart }}" onMouseMove="{{ panMove }}" onMouseUp="{{ panEnd }}" onMouseLeave="{{ panEnd }}" style="position:relative;width:100%;aspect-ratio:640/520;border-radius:10px;overflow:hidden;background:var(--water);cursor:{{ cursor }};user-select:none;touch-action:none">
+            <div style="position:absolute;inset:0;transform-origin:0 0;transform:{{ layerTf }}">
+              {{ mapSvg }}
+              <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="6">
+                <div onMouseEnter="{{ n.enter }}" onMouseLeave="{{ n.leave }}" onClick="{{ n.click }}" style="position:absolute;left:{{ n.left }};top:{{ n.top }};transform:translate(-50%,-50%) scale({{ inv }});cursor:pointer;z-index:2;padding:6px">
+                  <sc-if value="{{ n.isDepot }}" hint-placeholder-val="{{ false }}">
+                    <div style="width:20px;height:20px;border-radius:5px;background:var(--accent);border:2px solid var(--surface);box-shadow:0 1px 4px rgba(20,30,50,.25);transition:transform .15s" style-hover="transform:scale(1.15)"></div>
+                  </sc-if>
+                  <sc-if value="{{ n.isStation }}" hint-placeholder-val="{{ true }}">
+                    <div style="width:20px;height:20px;border-radius:50%;background:var(--surface);border:5px solid {{ n.c }};box-shadow:0 1px 4px rgba(20,30,50,.2);transition:transform .15s" style-hover="transform:scale(1.15)"></div>
+                  </sc-if>
+                  <span style="position:absolute;left:{{ n.labelLeft }};top:50%;transform:translate({{ n.labelShift }},-50%);font-size:13px;font-weight:600;white-space:nowrap;color:var(--ink);text-shadow:0 0 3px var(--land),0 0 3px var(--land),0 0 3px var(--land),0 0 3px var(--land)">{{ n.name }}</span>
+                </div>
+              </sc-for>
+              <sc-if value="{{ tip.show }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:{{ tip.left }};top:{{ tip.top }};transform-origin:50% 100%;transform:translate(-50%,calc(-100% - 18px)) scale({{ inv }});z-index:5;pointer-events:none;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:210px;box-shadow:0 8px 24px rgba(20,30,50,.14);display:flex;flex-direction:column;gap:8px">
+                  <span style="font-weight:600;font-size:15px">{{ tip.name }}</span>
+                  <sc-for list="{{ tip.rows }}" as="r" hint-placeholder-count="3">
+                    <div style="display:grid;grid-template-columns:56px 1fr 40px;gap:10px;align-items:center;font-size:13px">
+                      <span style="color:var(--muted)">{{ r.f }}</span>
+                      <div style="height:6px;border-radius:3px;background:var(--soft);overflow:hidden"><div style="height:100%;width:{{ r.pct }};background:{{ r.c }}"></div></div>
+                      <span style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums">{{ r.pct }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+            <div onMouseDown="{{ stop }}" style="position:absolute;right:12px;top:12px;z-index:6;display:flex;flex-direction:column;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow)">
+              <button onClick="{{ zoomIn }}" style="font:inherit;font-size:18px;width:34px;height:34px;border:none;border-bottom:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="background:var(--hover)">+</button>
+              <button onClick="{{ zoomOut }}" style="font:inherit;font-size:18px;width:34px;height:34px;border:none;border-bottom:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="background:var(--hover)">−</button>
+              <button onClick="{{ zoomReset }}" style="font:inherit;font-size:12px;width:34px;height:30px;border:none;background:var(--surface);color:var(--muted);cursor:pointer" style-hover="background:var(--hover)">Fit</button>
+            </div>
+            <span style="position:absolute;left:12px;bottom:10px;z-index:6;font-size:12px;color:var(--faint);pointer-events:none">Scroll to zoom · drag to move</span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px 20px;font-size:14px;color:var(--muted);white-space:nowrap">
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:3px;background:var(--accent)"></span>Depot</span>
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:50%;border:3px solid var(--low)"></span>Low &lt;25%</span>
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:50%;border:3px solid var(--mid)"></span>Medium 25–50%</span>
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:50%;border:3px solid var(--good)"></span>Good &gt;50%</span>
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:20px;border-top:2px dashed var(--road)"></span>Backup road</span>
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:20px;border-top:2px dashed var(--urgent)"></span>Closure ahead</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isTable }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:28px;overflow-x:auto">
+          <div style="display:flex;flex-wrap:wrap;gap:8px 20px;font-size:14px;color:var(--muted);white-space:nowrap">
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:18px;height:8px;border-radius:4px;background:var(--low)"></span>Low &lt;25%</span>
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:18px;height:8px;border-radius:4px;background:var(--mid)"></span>Medium 25–50%</span>
+            <span style="display:flex;align-items:center;gap:7px"><span style="width:18px;height:8px;border-radius:4px;background:var(--good)"></span>Good &gt;50%</span>
+          </div>
+          <div style="min-width:600px">
+            <div style="display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(3,minmax(110px,1fr));gap:24px;padding:0 10px 10px;font-size:14px;font-weight:600;color:var(--muted)">
+              <span>Station</span><span>Diesel</span><span>Petrol</span><span>Octane</span>
+            </div>
+            <sc-for list="{{ stations }}" as="s" hint-placeholder-count="4">
+              <div onClick="{{ s.click }}" style="display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(3,minmax(110px,1fr));gap:24px;align-items:center;padding:16px 10px;border-top:1px solid var(--line);cursor:pointer;border-radius:8px" style-hover="background:var(--hover)">
+                <div style="display:flex;flex-direction:column">
+                  <span style="font-weight:600;font-size:16px">{{ s.name }}</span>
+                  <span style="font-size:14px;color:var(--faint)">{{ s.nextOrder }}</span>
+                </div>
+                <sc-for list="{{ s.fuels }}" as="f" hint-placeholder-count="3">
+                  <div style="display:flex;flex-direction:column;gap:7px">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+                      <span style="font-size:16px;font-weight:600;font-variant-numeric:tabular-nums">{{ f.pct }}</span>
+                      <span style="font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums">{{ f.lvl }}</span>
+                    </div>
+                    <div style="height:8px;border-radius:4px;background:var(--soft);overflow:hidden"><div style="height:100%;width:{{ f.pct }};background:{{ f.c }};border-radius:4px"></div></div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+          </div>
+          <div style="min-width:600px">
+            <div style="display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(3,minmax(110px,1fr));gap:24px;padding:0 10px 10px;font-size:14px;font-weight:600;color:var(--muted)">
+              <span>Depot</span><span>Diesel</span><span>Petrol</span><span>Octane</span>
+            </div>
+            <sc-for list="{{ depots }}" as="d" hint-placeholder-count="2">
+              <div onClick="{{ d.click }}" style="display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(3,minmax(110px,1fr));gap:24px;align-items:center;padding:16px 10px;border-top:1px solid var(--line);cursor:pointer;border-radius:8px" style-hover="background:var(--hover)">
+                <div style="display:flex;flex-direction:column">
+                  <span style="font-weight:600;font-size:16px">{{ d.name }}</span>
+                  <span style="font-size:14px;color:var(--faint)">Next ship {{ d.shipShort }}</span>
+                </div>
+                <sc-for list="{{ d.fuels }}" as="f" hint-placeholder-count="3">
+                  <div style="display:flex;flex-direction:column;gap:7px">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+                      <span style="font-size:16px;font-weight:600;font-variant-numeric:tabular-nums">{{ f.pct }}</span>
+                      <span style="font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums">{{ f.lvl }}</span>
+                    </div>
+                    <div style="height:8px;border-radius:4px;background:var(--soft);overflow:hidden"><div style="height:100%;width:{{ f.pct }};background:{{ f.c }};border-radius:4px"></div></div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+          </div>
+          <div style="min-width:600px">
+            <div style="display:grid;grid-template-columns:minmax(180px,1.6fr) repeat(3,minmax(80px,1fr)) minmax(120px,1.1fr);gap:16px;padding:0 10px 10px;font-size:14px;font-weight:600;color:var(--muted)">
+              <span>Road</span><span>Type</span><span>Travel time</span><span>Max per truck</span><span>Status</span>
+            </div>
+            <sc-for list="{{ roads }}" as="r" hint-placeholder-count="6">
+              <div style="display:grid;grid-template-columns:minmax(180px,1.6fr) repeat(3,minmax(80px,1fr)) minmax(120px,1.1fr);gap:16px;align-items:center;padding:12px 10px;border-top:1px solid var(--line);font-size:15px">
+                <span style="font-weight:500">{{ r.name }}</span><span style="color:var(--muted)">{{ r.type }}</span><span style="color:var(--muted)">{{ r.travel }}</span><span style="color:var(--muted)">{{ r.maxL }}</span>
+                <span style="display:flex;align-items:center;gap:7px;white-space:nowrap"><span style="width:8px;height:8px;border-radius:50%;background:{{ r.c }}"></span>{{ r.status }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+    </section>
+
+    <div style="flex:1 1 400px;min-width:0;display:flex;flex-direction:column;gap:24px">
+      <section style="background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:22px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:2px">
+          <h2 style="margin:0;font-size:20px;font-weight:600">Action queue</h2>
+          <span style="font-size:14px;color:var(--muted)">Earliest deadline first</span>
+        </div>
+        <sc-if value="{{ queueEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:26px 16px;border-radius:10px;background:var(--soft);text-align:center;font-size:15px;color:var(--muted)">All stations covered until 18:00</div>
+        </sc-if>
+        <sc-for list="{{ queue }}" as="q" hint-placeholder-count="3">
+          <div onClick="{{ q.open }}" style="display:flex;align-items:stretch;gap:16px;padding:14px;border:1px solid var(--line);border-radius:12px;cursor:pointer;transition:background .15s,border-color .15s" style-hover="border-color:var(--hoverLine);background:var(--hover)">
+            <div style="width:96px;flex-shrink:0;border-radius:10px;padding:10px 8px;background:color-mix(in oklch, {{ q.c }} 12%, var(--surface));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;text-align:center">
+              <span style="font-size:12px;font-weight:600;color:var(--muted)">DECIDE BY</span>
+              <span style="font-size:24px;font-weight:600;line-height:1.15;font-variant-numeric:tabular-nums">{{ q.dl }}</span>
+              <span style="font-size:13px;font-weight:600;color:var(--ink)">{{ q.left }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:center;gap:6px;min-width:0;flex:1">
+              <span style="font-weight:600;font-size:17px">{{ q.title }}</span>
+              <span style="font-size:15px;color:var(--muted)">{{ q.line }}</span>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;white-space:nowrap">
+                <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in oklch, {{ q.c }} 14%, var(--surface))"><span style="width:7px;height:7px;border-radius:50%;background:{{ q.c }}"></span>{{ q.sevLabel }}</span>
+                <sc-if value="{{ q.review }}" hint-placeholder-val="{{ false }}">
+                  <span style="font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--line)">Needs your review</span>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </section>
+
+      <section style="flex:1;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:22px;display:flex;flex-direction:column">
+        <h2 style="margin:0 0 12px;font-size:20px;font-weight:600">Action log</h2>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:0 8px 8px;font-size:14px;font-weight:600;color:var(--muted)">
+          <span>Action · newest first</span><span>Status</span>
+        </div>
+        <sc-for list="{{ log }}" as="r" hint-placeholder-count="5">
+          <div onClick="{{ r.open }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:14px 8px;border-top:1px solid var(--line);cursor:pointer;border-radius:8px" style-hover="background:var(--hover)">
+            <div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+              <span style="font-weight:600;font-size:16px">{{ r.title }}</span>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;white-space:nowrap">
+                <span style="font-size:13px;font-weight:600;padding:2px 9px;border-radius:6px;background:{{ r.actorBg }};color:{{ r.actorFg }}">{{ r.actor }}</span>
+                <span style="font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums">{{ r.date }}</span>
+              </div>
+            </div>
+            <span style="display:inline-flex;align-items:center;gap:7px;font-size:14px;font-weight:600;padding:5px 12px;border-radius:999px;white-space:nowrap;background:color-mix(in oklch, {{ r.c }} 14%, var(--surface));border:1px solid color-mix(in oklch, {{ r.c }} 30%, var(--line))"><span style="width:8px;height:8px;border-radius:50%;background:{{ r.c }}"></span>{{ r.status }}</span>
+          </div>
+        </sc-for>
+      </section>
+    </div>
+  </main>
+
+  <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeDrawer }}" style="position:fixed;inset:0;background:var(--scrim);z-index:40"></div>
+    <aside style="position:fixed;top:0;right:0;bottom:0;width:min(400px,100%);background:var(--surface);z-index:41;box-shadow:-8px 0 30px rgba(20,30,50,.12);padding:28px;overflow-y:auto;display:flex;flex-direction:column;gap:24px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <span style="font-size:14px;color:var(--faint);white-space:nowrap">{{ dr.kicker }}</span>
+          <h2 style="margin:0;font-size:24px;font-weight:600">{{ dr.name }}</h2>
+        </div>
+        <button onClick="{{ closeDrawer }}" style="font:inherit;font-size:14px;padding:5px 12px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer" style-hover="background:var(--hover)">Close</button>
+      </div>
+      <sc-for list="{{ dr.fuels }}" as="f" hint-placeholder-count="3">
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:15px">
+            <span style="font-weight:600">{{ f.f }}</span>
+            <span style="font-variant-numeric:tabular-nums"><span style="font-weight:600">{{ f.pct }}</span> <span style="color:var(--faint)">· {{ f.lvl }} / {{ f.cap }}</span></span>
+          </div>
+          <div style="height:8px;border-radius:4px;background:var(--soft);overflow:hidden"><div style="height:100%;width:{{ f.pct }};background:{{ f.c }};border-radius:4px"></div></div>
+          <span style="font-size:14px;color:var(--muted)">{{ f.line }}</span>
+        </div>
+      </sc-for>
+      <div style="display:flex;flex-direction:column">
+        <sc-for list="{{ dr.stats }}" as="st" hint-placeholder-count="2">
+          <div style="display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid var(--line);font-size:15px">
+            <span style="color:var(--muted)">{{ st.k }}</span><span style="font-weight:500;text-align:right">{{ st.v }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <sc-if value="{{ dr.hasRec }}" hint-placeholder-val="{{ false }}">
+        <button onClick="{{ dr.openRec }}" style="font:inherit;font-size:15px;font-weight:500;padding:11px 16px;border-radius:8px;border:none;background:var(--accent);color:var(--accentInk);cursor:pointer" style-hover="opacity:.9">{{ dr.recLabel }}</button>
+      </sc-if>
+    </aside>
+  </sc-if>
+
+  <sc-if value="{{ recOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeRec }}" style="position:fixed;inset:0;background:var(--scrim);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px">
+      <div onClick="{{ stop }}" style="width:100%;max-width:620px;max-height:calc(100vh - 48px);overflow-y:auto;background:var(--surface);border-radius:16px;box-shadow:0 24px 60px rgba(20,30,50,.18);padding:30px;display:flex;flex-direction:column;gap:24px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <span style="display:flex;align-items:center;gap:8px;font-size:15px;color:var(--muted);white-space:nowrap"><span style="width:9px;height:9px;border-radius:50%;background:{{ rec.c }}"></span>{{ rec.sevLabel }} · {{ rec.title }}</span>
+            <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;white-space:nowrap">
+              <span style="font-size:15px;color:var(--faint)">Decide by</span>
+              <span style="font-size:38px;font-weight:600;letter-spacing:-0.02em;line-height:1.1">{{ rec.dl }}</span>
+              <span style="font-size:15px;color:var(--muted)">{{ rec.left }} left</span>
+            </div>
+          </div>
+          <button onClick="{{ closeRec }}" style="font:inherit;font-size:14px;padding:5px 12px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer" style-hover="background:var(--hover)">Close</button>
+        </div>
+
+        <div style="padding:16px 18px;border-radius:10px;background:var(--soft);display:flex;flex-direction:column;gap:2px">
+          <span style="font-weight:600;font-size:17px">{{ rec.shipLine }}</span>
+          <span style="font-size:14px;color:var(--muted)">{{ rec.shipSub }}</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <span style="font-size:14px;font-weight:600;color:var(--muted)">Station state</span>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:18px">
+            <sc-for list="{{ rec.state }}" as="s" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <span style="font-size:14px;color:var(--muted)">{{ s.k }}</span>
+                <span style="font-weight:600;font-size:16px">{{ s.v }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+          <div style="border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:14px;color:var(--muted)">Importance</span>
+            <span style="font-size:26px;font-weight:600">{{ rec.importance }}</span>
+          </div>
+          <div style="border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:14px;color:var(--muted)">Risk before</span>
+            <span style="font-size:26px;font-weight:600;color:var(--urgent)">{{ rec.riskB }}</span>
+          </div>
+          <div style="border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:14px;color:var(--muted)">Risk after</span>
+            <span style="font-size:26px;font-weight:600;color:var(--safe)">{{ rec.riskA }}</span>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <button onClick="{{ askWhy }}" style="font:inherit;font-size:14px;font-weight:500;padding:7px 14px;border-radius:8px;border:1px solid var(--hoverLine);background:var(--hover);color:var(--accent);cursor:pointer" style-hover="border-color:var(--accent)">Ask why</button>
+            <sc-for list="{{ rec.questions }}" as="qq" hint-placeholder-count="3">
+              <button onClick="{{ qq.ask }}" style="font:inherit;font-size:14px;padding:7px 14px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer" style-hover="border-color:var(--hoverLine);background:var(--hover)">{{ qq.q }}</button>
+            </sc-for>
+          </div>
+          <sc-if value="{{ askShow }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:16px 18px;border-radius:10px;background:var(--soft);display:flex;flex-direction:column;gap:6px">
+              <span style="font-size:12px;color:var(--faint)">{{ aiBadge }}</span>
+              <p style="margin:0;font-size:15px;line-height:1.6;text-wrap:pretty">{{ askText }}</p>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:flex-end;padding-top:20px;border-top:1px solid var(--line)">
+          <sc-if value="{{ editing }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:8px;margin-right:auto">
+              <button onClick="{{ qtyDown }}" style="font:inherit;font-size:18px;width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="background:var(--hover)">−</button>
+              <span style="min-width:86px;text-align:center;font-weight:600;font-size:16px;font-variant-numeric:tabular-nums">{{ editQtyL }}</span>
+              <button onClick="{{ qtyUp }}" style="font:inherit;font-size:18px;width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="background:var(--hover)">+</button>
+            </div>
+          </sc-if>
+          <button onClick="{{ reject }}" style="font:inherit;font-size:15px;font-weight:500;padding:10px 18px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="background:var(--hover)">Reject</button>
+          <button onClick="{{ toggleEdit }}" style="font:inherit;font-size:15px;font-weight:500;padding:10px 18px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer" style-hover="background:var(--hover)">{{ editLabel }}</button>
+          <button onClick="{{ approve }}" style="font:inherit;font-size:15px;font-weight:500;padding:10px 20px;border-radius:8px;border:none;background:var(--accent);color:var(--accentInk);cursor:pointer" style-hover="opacity:.9">{{ approveLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ logOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeLog }}" style="position:fixed;inset:0;background:var(--scrim);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px">
+      <div onClick="{{ stop }}" style="width:100%;max-width:600px;max-height:calc(100vh - 48px);overflow-y:auto;background:var(--surface);border-radius:16px;box-shadow:0 24px 60px rgba(20,30,50,.18);padding:30px;display:flex;flex-direction:column;gap:26px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-size:14px;color:var(--faint);white-space:nowrap">{{ lg.taken }} · {{ lg.actorLine }}</span>
+            <span style="font-size:24px;font-weight:600;line-height:1.25">{{ lg.title }}</span>
+          </div>
+          <button onClick="{{ closeLog }}" style="font:inherit;font-size:14px;padding:5px 12px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer" style-hover="background:var(--hover)">Close</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));position:relative">
+          <div style="position:absolute;left:12.5%;right:12.5%;top:7px;height:2px;background:var(--line)"></div>
+          <div style="position:absolute;left:12.5%;top:7px;height:2px;width:{{ lg.progress }};background:var(--accent)"></div>
+          <sc-for list="{{ lg.steps }}" as="s" hint-placeholder-count="4">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;position:relative;text-align:center">
+              <div style="width:16px;height:16px;border-radius:50%;background:{{ s.fill }};border:2px solid {{ s.ring }}"></div>
+              <span style="font-size:14px;font-weight:500">{{ s.label }}</span>
+              <span style="font-size:14px;color:var(--faint)">{{ s.at }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <span style="font-size:12px;color:var(--faint)">{{ aiBadge }}</span>
+          <p style="margin:0;font-size:15px;line-height:1.6;text-wrap:pretty">{{ lg.summary }}</p>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <span style="font-size:14px;font-weight:600;color:var(--muted)">State when decided</span>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:18px">
+            <sc-for list="{{ lg.state }}" as="s" hint-placeholder-count="3">
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <span style="font-size:14px;color:var(--muted)">{{ s.k }}</span>
+                <span style="font-weight:600;font-size:16px">{{ s.v }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:18px;border-top:1px solid var(--line);font-size:15px;flex-wrap:wrap">
+          <span style="color:var(--muted)">{{ lg.check }}</span>
+          <span style="display:flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap"><span style="width:8px;height:8px;border-radius:50%;background:{{ lg.c }}"></span>{{ lg.verdict }}</span>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ toastShow }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;background:var(--surface);border:1px solid var(--line);color:var(--ink);padding:12px 18px;border-radius:10px;font-size:15px;box-shadow:0 10px 30px rgba(20,30,50,.14);max-width:calc(100% - 48px)">{{ toast }}</div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;demoState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Normal&quot;,&quot;Crisis&quot;,&quot;Simulator down&quot;,&quot;AI down&quot;,&quot;Empty queue&quot;],&quot;default&quot;:&quot;Crisis&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Demo&quot;},&quot;live&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Demo&quot;},&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;}}">
+const E = React.createElement;
+const RISK = { urgent: ['Urgent', 'var(--urgent)', 3], watch: ['Watch', 'var(--watch)', 2], plan: ['Plan ahead', 'var(--plan)', 1], safe: ['Safe', 'var(--safe)', 0] };
+const lvlColor = p => p < 25 ? 'var(--low)' : p < 50 ? 'var(--mid)' : 'var(--good)';
+// Approximate positions, spread so nearby Dhaka sites stay legible
+const LL = { gazipur: [24.05, 90.55], tongi: [24.4, 89.85], mirpur: [23.45, 89.85], patiya: [22.25, 92.05], karnaphuli: [22.75, 91.35], coxs: [21.4, 92.0] };
+const FALLBACK = { gazipur: [330, 190], tongi: [270, 150], mirpur: [270, 250], patiya: [440, 360], karnaphuli: [390, 320], coxs: [440, 440] };
+const LABEL_LEFT = { tongi: true, mirpur: true, karnaphuli: true };
+const ROADS = [
+  { id: 'gazipur-mirpur', a: 'gazipur', b: 'mirpur', name: 'Gazipur → Mirpur', main: true, min: 30, max: 7000 },
+  { id: 'gazipur-tongi', a: 'gazipur', b: 'tongi', name: 'Gazipur → Tongi', main: true, min: 30, max: 6500 },
+  { id: 'patiya-karnaphuli', a: 'patiya', b: 'karnaphuli', name: 'Patiya → Karnaphuli', main: true, min: 30, max: 7000 },
+  { id: 'patiya-coxs', a: 'patiya', b: 'coxs', name: "Patiya → Cox's Bazar", main: true, min: 45, max: 6000 },
+  { id: 'gazipur-karnaphuli', a: 'gazipur', b: 'karnaphuli', name: 'Gazipur → Karnaphuli', main: false, min: 60, max: 5000 },
+  { id: 'patiya-mirpur', a: 'patiya', b: 'mirpur', name: 'Patiya → Mirpur', main: false, min: 60, max: 5000 },
+];
+const STATIONS = [
+  { id: 'mirpur', name: 'Mirpur', region: 'Dhaka', single: false, rush: '16:00–20:00', demand: '+78%',
+    fuels: [{ f: 'Diesel', lvl: 9300, cap: 15000, risk: 'safe', empty: 'Day 3 07:00', orderBy: 'Day 3 06:15', transit: 0 },
+      { f: 'Petrol', lvl: 2400, cap: 14000, risk: 'urgent', empty: '16:45', orderBy: '16:00', transit: 0 },
+      { f: 'Octane', lvl: 4320, cap: 9000, risk: 'safe', empty: 'Day 3 02:30', orderBy: 'Day 3 01:45', transit: 0 }] },
+  { id: 'tongi', name: 'Tongi', region: 'Dhaka', single: true, rush: 'until 17:59', demand: '+64%',
+    fuels: [{ f: 'Diesel', lvl: 5580, cap: 18000, risk: 'watch', empty: '20:15', orderBy: '19:30', transit: 0 },
+      { f: 'Petrol', lvl: 4950, cap: 9000, risk: 'safe', empty: 'Day 3 09:00', orderBy: 'Day 3 08:15', transit: 0 },
+      { f: 'Octane', lvl: 2400, cap: 6000, risk: 'safe', empty: 'Day 3 14:00', orderBy: 'Day 3 13:15', transit: 0 }] },
+  { id: 'karnaphuli', name: 'Karnaphuli', region: 'Chattogram', single: false, rush: '16:00–20:00', demand: '+4%',
+    fuels: [{ f: 'Diesel', lvl: 8120, cap: 14000, risk: 'safe', empty: 'Day 3 02:00', orderBy: 'Day 3 01:15', transit: 0 },
+      { f: 'Petrol', lvl: 7500, cap: 15000, risk: 'safe', empty: 'Day 3 01:00', orderBy: 'Day 3 00:15', transit: 0 },
+      { f: 'Octane', lvl: 1980, cap: 9000, risk: 'safe', empty: 'Day 3 03:00', orderBy: 'Day 3 02:15', transit: 3000 }] },
+  { id: 'coxs', name: "Cox's Bazar", region: 'Chattogram', single: true, rush: 'until 20:59', demand: '+2%',
+    fuels: [{ f: 'Diesel', lvl: 5280, cap: 12000, risk: 'plan', empty: '21:30', orderBy: '17:00', transit: 0 },
+      { f: 'Petrol', lvl: 7320, cap: 12000, risk: 'safe', empty: 'Day 3 06:00', orderBy: 'Day 3 05:15', transit: 0 },
+      { f: 'Octane', lvl: 3640, cap: 7000, risk: 'safe', empty: 'Day 3 10:00', orderBy: 'Day 3 09:15', transit: 0 }] },
+];
+const DEPOTS = [
+  { id: 'gazipur', name: 'Gazipur', region: 'Dhaka', used: 0, max: 12000,
+    fuels: [{ f: 'Diesel', lvl: 86000, cap: 90000, runway: '~52 h' }, { f: 'Petrol', lvl: 41000, cap: 70000, runway: '~30 h' }, { f: 'Octane', lvl: 22000, cap: 45000, runway: '~44 h' }],
+    ship: 'Diesel +12,000 L, Day 3 00:00', shipShort: 'Day 3 00:00', overflow: '8,000 L · covered by plan' },
+  { id: 'patiya', name: 'Patiya', region: 'Chattogram', used: 3000, max: 11000,
+    fuels: [{ f: 'Diesel', lvl: 48000, cap: 85000, runway: '~40 h' }, { f: 'Petrol', lvl: 58000, cap: 65000, runway: '~48 h' }, { f: 'Octane', lvl: 19000, cap: 40000, runway: '~36 h' }],
+    ship: 'Petrol +8,000 L, Day 3 04:00', shipShort: 'Day 3 04:00', overflow: '1,000 L · covered by plan' },
+];
+const RECS = [
+  { id: 42, sev: 'urgent', st: 'mirpur', title: 'Mirpur · Petrol', fuel: 'Petrol', deadline: 2400, dl: '16:00', qty: 7000, roadId: 'gazipur-mirpur', road: 'Gazipur → Mirpur', travel: 30, arrives: '16:30', maxL: 7000,
+    emptyAt: '16:45', unserved: 4800, level: 2400, cap: 14000, demandNow: '+78%', signal: 'Dhaka spike ×1.8',
+    conf: 'High', needs: null, importance: 92, riskB: 88, riskA: 6,
+    ai: { why: "The Dhaka spike and the 16:00 rush will empty Mirpur's petrol at 16:45. A 7,000 L truck from Gazipur arrives at 16:30 and keeps it safe until Day 3 06:00.",
+      'Why not Patiya?': 'The backup road takes 60 minutes and carries 5,000 L at most. Sent at 16:00 it arrives after the tank is empty.',
+      'Wait an hour?': 'The truck would arrive at 17:30, 45 minutes after Mirpur runs dry. About 900 L goes unserved.',
+      'If the road closes?': 'The backup road from Patiya can carry 5,000 L. It would need to leave by 15:30.' },
+    tpl: 'Mirpur petrol empties at 16:45. 7,000 L via Gazipur → Mirpur arrives 16:30. Without it: ~4,800 L unserved.' },
+  { id: 44, sev: 'plan', st: 'coxs', title: "Cox's Bazar · Diesel", fuel: 'Diesel', deadline: 2460, dl: '17:00', qty: 6000, roadId: 'patiya-coxs', road: "Patiya → Cox's Bazar", travel: 45, arrives: '17:45', maxL: 6000,
+    emptyAt: '21:30', unserved: 1600, level: 5280, cap: 12000, demandNow: '+2%', signal: 'Only road closes 18:00',
+    conf: 'High', needs: null, importance: 74, riskB: 71, riskA: 8,
+    ai: { why: "Cox's Bazar's only road closes 18:00–24:00. Without a delivery, diesel runs out at 21:30. 6,000 L sent now arrives at 17:45, before the closure.",
+      'Why not Patiya?': "Patiya is already the source; it is the only depot that reaches Cox's Bazar.",
+      'Wait an hour?': 'The truck would reach the road as it closes. The shipment would fail.',
+      'If the road closes?': 'The closure is already planned for. There is no backup road, so this must arrive by 18:00.' },
+    tpl: "Cox's Bazar diesel empties at 21:30; its only road closes at 18:00. 6,000 L via Patiya arrives 17:45." },
+  { id: 45, sev: 'watch', st: 'tongi', title: 'Tongi · Diesel', fuel: 'Diesel', deadline: 2610, dl: '19:30', qty: 6500, roadId: 'gazipur-tongi', road: 'Gazipur → Tongi', travel: 30, arrives: '20:00', maxL: 6500,
+    emptyAt: '20:15', unserved: 2300, level: 5580, cap: 18000, demandNow: '+64%', signal: 'Forecast error 22%',
+    conf: 'Medium', needs: 'Forecast error 22%', importance: 63, riskB: 54, riskA: 11,
+    ai: { why: "Tongi's diesel demand is 64% above forecast, so the tank empties around 20:15. 6,500 L from Gazipur arrives at 20:00. It needs your review because the forecast has been off by 22% today.",
+      'Why not Patiya?': 'Tongi has one road, from Gazipur. Patiya cannot reach it.',
+      'Wait an hour?': 'The truck would arrive 45 minutes after the tank empties. About 500 L goes unserved.',
+      'If the road closes?': 'No fuel could reach Tongi. Sending before 18:00 would be safer.' },
+    tpl: 'Tongi diesel empties at 20:15. 6,500 L via Gazipur arrives 20:00. Needs review: forecast error 22%.' },
+];
+const LOG = [
+  { id: 43, title: 'Karnaphuli · Octane · 3,000 L', actor: 'Autopilot', taken: 'Day 2 13:15', status: 'In transit', c: 'var(--accent)', done: 2, steps: ['13:15', '13:15', '~13:45', '—'],
+    summary: 'Autopilot sent 3,000 L of octane from Patiya because Karnaphuli would have run out at 18:30. It met every autopilot rule.',
+    state: [['Octane', '1,980 L (22%)'], ['Empty at', '18:30'], ['Demand', '+4%']], check: 'Arrival predicted 13:45', verdict: 'Waiting', vc: 'var(--faint)' },
+  { id: 38, title: 'Mirpur · Petrol · 5,000 L', actor: 'Operator', taken: 'Day 1 12:15', status: 'Verified', c: 'var(--safe)', done: 4, steps: ['12:15', '12:15', '12:45', '13:00'],
+    summary: 'Approved ahead of the lunchtime peak. It arrived at 12:45 as predicted, and the lowest level stayed close to the forecast.',
+    state: [['Petrol', '3,100 L (22%)'], ['Empty at', '14:30'], ['Demand', '+6%']], check: 'Lowest level: predicted 1,400 L · actual 1,520 L', verdict: 'Prediction held', vc: 'var(--safe)' },
+  { id: 40, title: 'Tongi · Diesel · 6,500 L', actor: 'Operator', taken: 'Day 2 06:10', status: 'Missed', c: 'var(--urgent)', done: 4, steps: ['06:10', '06:15', '06:45', '13:00'],
+    summary: 'Arrived on time, but the level fell lower than forecast once the Dhaka spike began. The forecaster was rescaled at 12:30.',
+    state: [['Diesel', '4,200 L (23%)'], ['Empty at', '09:15'], ['Demand', '+2%']], check: 'Lowest level: predicted 2,000 L · actual 1,150 L', verdict: 'Forecast too low', vc: 'var(--urgent)' },
+  { id: 37, title: "Cox's Bazar · Petrol · 4,000 L", actor: 'Autopilot', taken: 'Day 2 09:00', status: 'Verified', c: 'var(--safe)', done: 4, steps: ['09:00', '09:00', '09:45', '10:30'],
+    summary: 'Sent ahead of daytime demand. Arrived at 09:45 and stayed above the safety level.',
+    state: [['Petrol', '3,400 L (28%)'], ['Empty at', '13:45'], ['Demand', '+1%']], check: 'Lowest level: predicted 1,900 L · actual 2,050 L', verdict: 'Prediction held', vc: 'var(--safe)' },
+  { id: 36, title: 'Mirpur · Diesel · 3,000 L', actor: 'Operator', taken: 'Day 2 08:30', status: 'Rejected', c: 'var(--faint)', done: 1, steps: ['08:30', '—', '—', '—'],
+    summary: 'Rejected by the operator. Diesel stayed above 55% all morning, so it was not needed.',
+    state: [['Diesel', '8,900 L (59%)'], ['Empty at', 'Day 3 04:00'], ['Demand', '+3%']], check: 'Lowest level: predicted 6,800 L · actual 7,100 L', verdict: 'Not sent', vc: 'var(--faint)' },
+];
+const QUESTIONS = ['Why not Patiya?', 'Wait an hour?', 'If the road closes?'];
+const fmt = n => Math.round(n).toLocaleString('en-US');
+const pctN = (a, b) => Math.round(a / b * 100);
+const pct = (a, b) => pctN(a, b) + '%';
+const dur = m => m <= 0 ? 'overdue' : (Math.floor(m / 60) ? Math.floor(m / 60) + 'h ' : '') + (m % 60) + 'm';
+
+class Component extends DCLogic {
+  state = { t: 2250, playing: true, theme: null, view: 'map', hover: null, drawer: null, rec: null, logId: null, ask: null, editing: false, editQty: 0, handled: {}, extraLog: [], autopilot: true, toast: null, geo: null, z: { k: 1, x: 0, y: 0 }, dragging: false };
+  componentDidMount() {
+    this.iv = setInterval(() => {
+      if (!this.state.playing || this.props.live === false || this.demo() === 'Simulator down') return;
+      this.setState(s => ({ t: s.t + 15 > 2250 + 135 ? 2250 : s.t + 15 }));
+    }, 3000);
+    this.loadGeo().catch(() => {});
+    this.onWheel = e => {
+      e.preventDefault();
+      const r = this.mapEl.getBoundingClientRect();
+      this.zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - r.left, e.clientY - r.top);
+    };
+    this.mapRef = el => {
+      if (this.mapEl === el) return;
+      if (this.mapEl) this.mapEl.removeEventListener('wheel', this.onWheel);
+      this.mapEl = el;
+      if (el) el.addEventListener('wheel', this.onWheel, { passive: false });
+    };
+    this.forceUpdate();
+  }
+  componentWillUnmount() { clearInterval(this.iv); clearTimeout(this.askT); clearTimeout(this.toastT); if (this.mapEl) this.mapEl.removeEventListener('wheel', this.onWheel); }
+  zoomAt(f, cx, cy) {
+    const el = this.mapEl; if (!el) return;
+    const w = el.clientWidth, h = el.clientHeight;
+    if (cx == null) { cx = w / 2; cy = h / 2; }
+    this.setState(s => {
+      const k = Math.min(5, Math.max(1, s.z.k * f)), r = k / s.z.k;
+      return { z: this.clamp({ k, x: cx - (cx - s.z.x) * r, y: cy - (cy - s.z.y) * r }) };
+    });
+  }
+  clamp(z) {
+    const el = this.mapEl; if (!el) return z;
+    const w = el.clientWidth, h = el.clientHeight;
+    return { k: z.k, x: Math.min(0, Math.max(w - w * z.k, z.x)), y: Math.min(0, Math.max(h - h * z.k, z.y)) };
+  }
+  async loadGeo() {
+    for (let i = 0; i < 80 && !(window.d3 && window.topojson); i++) await new Promise(r => setTimeout(r, 100));
+    if (!window.d3 || !window.topojson) return;
+    const topo = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-110m.json').then(r => r.json());
+    const all = topojson.feature(topo, topo.objects.countries).features;
+    const near = all.filter(f => { const [[x0, y0], [x1, y1]] = d3.geoBounds(f); return x1 > 84 && x0 < 98 && y1 > 16 && y0 < 30; });
+    const proj = d3.geoMercator().fitExtent([[20, 20], [620, 500]], { type: 'MultiPoint', coordinates: [[87.6, 26.8], [93.2, 20.5]] });
+    const path = d3.geoPath(proj);
+    const land = near.map(f => ({ d: path(f), bd: f.id === '050' })).filter(x => x.d);
+    const xy = {}; for (const k in LL) xy[k] = proj([LL[k][1], LL[k][0]]);
+    const lbl = { bd: proj([89.4, 25.4]), india: proj([88.3, 23.2]), india2: proj([92.4, 25.9]), myanmar: proj([93.0, 21.2]), bay: proj([90.2, 21.0]) };
+    this.setState({ geo: { land, xy, lbl } });
+  }
+  demo() { return this.props.demoState ?? 'Crisis'; }
+  notify(msg) { clearTimeout(this.toastT); this.setState({ toast: msg }); this.toastT = setTimeout(() => this.setState({ toast: null }), 3000); }
+  clock(t) { const d = Math.floor(t / 1440) + 1, m = t % 1440; return `Day ${d} · ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; }
+  XY() { return this.state.geo ? this.state.geo.xy : FALLBACK; }
+
+  stations(demo) {
+    const calm = demo === 'Normal' || demo === 'Empty queue';
+    return STATIONS.map(s => {
+      const fuels = s.fuels.map(f => ({ ...f }));
+      let demand = s.demand;
+      if (calm) {
+        demand = '+2%';
+        if (s.id === 'mirpur') Object.assign(fuels[1], { lvl: 9800, risk: 'safe', empty: 'Day 3 03:00', orderBy: 'Day 3 02:15' });
+        if (s.id === 'coxs') Object.assign(fuels[0], { lvl: 7400, risk: 'safe', empty: 'Day 3 05:00', orderBy: 'Day 3 04:15' });
+        if (s.id === 'tongi' && demo === 'Empty queue') Object.assign(fuels[0], { lvl: 11200, risk: 'safe', empty: 'Day 3 08:00', orderBy: 'Day 3 07:15' });
+      }
+      const minP = Math.min(...fuels.map(f => pctN(f.lvl, f.cap)));
+      const next = fuels.filter(f => f.risk !== 'safe')[0];
+      return { ...s, fuels, demand, minP, nextOrder: next ? `${next.f} order by ${next.orderBy}` : 'No order needed today' };
+    });
+  }
+  recs(demo) {
+    if (demo === 'Empty queue') return [];
+    if (demo === 'Normal') return [{ ...RECS[2], needs: null, conf: 'High', demandNow: '+3%', signal: 'Industrial hours' }];
+    return RECS;
+  }
+
+  mapSvg(demo, trucks) {
+    const XY = this.XY(), g = this.state.geo, crisis = !(demo === 'Normal' || demo === 'Empty queue');
+    const ns = { vectorEffect: 'non-scaling-stroke' };
+    const kids = [];
+    if (g) {
+      g.land.forEach((l, i) => kids.push(E('path', { key: 'l' + i, d: l.d, fill: l.bd ? 'var(--land)' : 'var(--land2)', stroke: 'var(--landLine)', strokeWidth: l.bd ? 1.3 : 0.8, strokeLinejoin: 'round', ...ns })));
+      const t = (k, p, s, o) => kids.push(E('text', { key: k, x: p[0], y: p[1], fontSize: o.size || 12, letterSpacing: o.it ? 0 : '0.12em', fill: 'var(--faint)', textAnchor: 'middle', fontStyle: o.it ? 'italic' : 'normal', fontWeight: o.w || 500, fontFamily: 'inherit' }, s));
+      t('t0', g.lbl.bd, 'BANGLADESH', { size: 13, w: 600 }); t('t1', g.lbl.india, 'INDIA', {}); t('t2', g.lbl.india2, 'INDIA', {}); t('t3', g.lbl.myanmar, 'MYANMAR', {}); t('t4', g.lbl.bay, 'Bay of Bengal', { it: true, size: 14 });
+    }
+    ROADS.forEach(r => {
+      const [x1, y1] = XY[r.a], [x2, y2] = XY[r.b];
+      const sched = crisis && r.id === 'patiya-coxs';
+      kids.push(E('line', { key: r.id + 'c', x1, y1, x2, y2, stroke: 'var(--surface)', strokeWidth: r.main ? 6 : 4, strokeLinecap: 'round', opacity: 0.9, ...ns }));
+      kids.push(E('line', { key: r.id, x1, y1, x2, y2, stroke: sched ? 'var(--urgent)' : 'var(--road)', strokeWidth: r.main ? 2.8 : 2, strokeDasharray: sched ? '6 5' : r.main ? null : '5 5', strokeLinecap: 'round', ...ns }));
+    });
+    const k = this.state.z.k;
+    trucks.forEach((tr, i) => {
+      const r = ROADS.find(x => x.id === tr.road); const [x1, y1] = XY[r.a], [x2, y2] = XY[r.b];
+      kids.push(E('circle', { key: 'tk' + i, cx: x1 + (x2 - x1) * tr.p, cy: y1 + (y2 - y1) * tr.p, r: 5 / k, fill: 'var(--accent)', stroke: 'var(--surface)', strokeWidth: 2, ...ns }));
+    });
+    return E('svg', { viewBox: '0 0 640 520', preserveAspectRatio: 'none', style: { position: 'absolute', inset: 0, width: '100%', height: '100%' } }, ...kids);
+  }
+
+  renderVals() {
+    const s = this.state, demo = this.demo(), XY = this.XY();
+    const theme = s.theme ?? this.props.defaultTheme ?? 'light';
+    const simDown = demo === 'Simulator down', aiDown = demo === 'AI down';
+    const crisis = !(demo === 'Normal' || demo === 'Empty queue');
+    const stations = this.stations(demo);
+    const allRecs = this.recs(demo);
+    const pending = allRecs.filter(r => !s.handled[r.id]).sort((a, b) => a.deadline - b.deadline);
+    const trucks = [{ road: 'patiya-karnaphuli', p: 0.6 }, ...s.extraLog.filter(l => l.roadId).map(l => ({ road: l.roadId, p: 0.25 }))];
+    const aiBadge = aiDown ? 'Template text · AI unavailable' : 'Written by AI (Gemini)';
+    const openRec = id => this.setState({ rec: id, ask: null, editing: false, drawer: null });
+    const pos = id => ({ left: XY[id][0] / 640 * 100 + '%', top: XY[id][1] / 520 * 100 + '%' });
+
+    const queue = pending.map(r => ({ title: r.title, dl: r.dl, c: RISK[r.sev][1],
+      line: `${fmt(r.qty)} L · ${r.road}`, sevLabel: RISK[r.sev][0], left: dur(r.deadline - s.t) + (r.deadline - s.t > 0 ? ' left' : ''), review: !!r.needs, open: () => openRec(r.id) }));
+
+    const clickNode = id => { if (this.moved) return; this.setState({ drawer: id, hover: null }); };
+    const nodes = [
+      ...DEPOTS.map(d => ({ id: d.id, name: d.name, isDepot: true, isStation: false, c: 'var(--accent)' })),
+      ...stations.map(st => ({ id: st.id, name: st.name, isDepot: false, isStation: true, c: lvlColor(st.minP) })),
+    ].map(n => ({ ...n, ...pos(n.id), labelLeft: LABEL_LEFT[n.id] ? '0px' : '100%', labelShift: LABEL_LEFT[n.id] ? 'calc(-100% - 2px)' : '2px',
+      enter: () => !s.dragging && this.setState({ hover: n.id }), leave: () => this.setState({ hover: null }), click: () => clickNode(n.id) }));
+
+    let tip = { show: false };
+    if (s.hover && !s.dragging) {
+      const st = stations.find(x => x.id === s.hover), dp = DEPOTS.find(x => x.id === s.hover);
+      if (st) tip = { show: true, ...pos(st.id), name: st.name, rows: st.fuels.map(f => ({ f: f.f, pct: pct(f.lvl, f.cap), c: lvlColor(pctN(f.lvl, f.cap)) })) };
+      if (dp) tip = { show: true, ...pos(dp.id), name: dp.name + ' depot', rows: dp.fuels.map(f => ({ f: f.f, pct: pct(f.lvl, f.cap), c: lvlColor(pctN(f.lvl, f.cap)) })) };
+    }
+
+    let dr = {};
+    if (s.drawer) {
+      const st = stations.find(x => x.id === s.drawer), dp = DEPOTS.find(x => x.id === s.drawer);
+      if (st) {
+        const r = pending.find(x => x.st === st.id);
+        dr = { kicker: `Station · ${st.region}${st.single ? ' · single road' : ''}`, name: st.name,
+          fuels: st.fuels.map(f => ({ f: f.f, c: lvlColor(pctN(f.lvl, f.cap)), lvl: fmt(f.lvl), cap: fmt(f.cap) + ' L', pct: pct(f.lvl, f.cap),
+            line: `Empty ${f.empty} · order by ${f.orderBy}` + (f.transit ? ` · +${fmt(f.transit)} L arriving 13:45` : '') })),
+          stats: [{ k: 'Demand vs forecast', v: st.demand }, { k: 'Next rush', v: st.rush }],
+          hasRec: !!r, recLabel: r ? `Open action · by ${r.dl}` : '', openRec: () => r && openRec(r.id) };
+      } else if (dp) {
+        dr = { kicker: `Depot · ${dp.region} · open`, name: dp.name,
+          fuels: dp.fuels.map(f => ({ f: f.f, c: lvlColor(pctN(f.lvl, f.cap)), lvl: fmt(f.lvl), cap: fmt(f.cap) + ' L', pct: pct(f.lvl, f.cap), line: `Runway ${f.runway}` })),
+          stats: [{ k: 'Next ship', v: dp.ship }, { k: 'Overflow risk', v: dp.overflow }, { k: 'Dispatch this step', v: `${fmt(dp.used)} / ${fmt(dp.max)} L` }], hasRec: false };
+      }
+    }
+
+    const rr = allRecs.find(r => r.id === s.rec);
+    let rec = {};
+    if (rr) {
+      rec = { title: rr.title, sevLabel: RISK[rr.sev][0], c: RISK[rr.sev][1], dl: rr.dl, left: dur(rr.deadline - s.t),
+        shipLine: `Send ${fmt(s.editing ? s.editQty : rr.qty)} L · ${rr.road}`, shipSub: `Arrives ~${rr.arrives} · ${rr.travel} min` + (rr.needs ? ` · needs review: ${rr.needs}` : ` · confidence ${rr.conf.toLowerCase()}`),
+        state: [{ k: `${rr.fuel} now`, v: `${fmt(rr.level)} L · ${pct(rr.level, rr.cap)}` }, { k: 'Empty at', v: rr.emptyAt }, { k: 'Demand', v: rr.demandNow }, { k: 'Cause', v: rr.signal }],
+        importance: rr.importance, riskB: rr.riskB + '%', riskA: rr.riskA + '%',
+        questions: QUESTIONS.map(q => ({ q, ask: () => this.askQ(rr, q) })) };
+    }
+
+    const allLog = [...s.extraLog, ...LOG];
+    const tMin = x => { const m = /Day (\d+) (\d+):(\d+)/.exec(x); return m ? (+m[1]) * 1440 + (+m[2]) * 60 + (+m[3]) : 0; };
+    const log = [...allLog].sort((a, b) => tMin(b.taken) - tMin(a.taken)).map(l => ({ title: l.title, actor: l.actor, date: l.taken.replace(/(Day \d+) /, '$1 · '),
+      actorBg: l.actor === 'Autopilot' ? 'var(--hover)' : 'var(--soft)', actorFg: l.actor === 'Autopilot' ? 'var(--accent)' : 'var(--ink)',
+      status: l.status, c: l.c, open: () => this.setState({ logId: l.id }) }));
+    const L = allLog.find(l => l.id === s.logId);
+    let lg = {};
+    if (L) {
+      lg = { title: L.title, taken: L.taken, actorLine: L.actor, summary: aiDown ? (L.tpl || L.summary) : L.summary,
+        steps: ['Action taken', 'Departed', 'Arrived', 'Verified'].map((lb, i) => ({ label: lb, at: L.steps[i], fill: i < L.done ? 'var(--accent)' : 'var(--surface)', ring: i < L.done ? 'var(--accent)' : 'var(--line)' })),
+        progress: Math.max(0, L.done - 1) / 3 * 75 + '%', state: L.state.map(([k, v]) => ({ k, v })), check: L.check, verdict: L.verdict, c: L.vc };
+    }
+
+    const incidents = [];
+    if (crisis) incidents.push({ c: 'var(--urgent)', title: 'Dhaka demand spike ×1.8', when: '12:00 – 22:00', detail: 'Demand is up at Mirpur and Tongi. Two shipments are proposed.' });
+    if (crisis) incidents.push({ c: 'var(--watch)', title: s.t < 2520 ? "Cox's Bazar road closes soon" : "Cox's Bazar road closed", when: s.t < 2520 ? 'in ' + dur(2520 - s.t) : 'until 24:00', detail: "Patiya → Cox's Bazar, 18:00 – 24:00. There is no backup road." });
+    if (aiDown) incidents.push({ c: 'var(--watch)', title: 'AI explainer down', when: 'now', detail: 'Explanations use template text. Nothing else changes.' });
+
+    const autoOn = s.autopilot && !simDown;
+    const health = simDown ? { c: 'var(--urgent)', text: 'Simulator down' } : aiDown ? { c: 'var(--watch)', text: 'AI down · data 2 s old' } : { c: 'var(--safe)', text: 'All systems healthy · data 2 s old' };
+    const tab = on => ({ bg: on ? 'var(--surface)' : 'transparent', fg: on ? 'var(--ink)' : 'var(--muted)', sh: on ? '0 1px 2px rgba(20,30,50,.08)' : 'none' });
+    const z = s.z;
+
+    return {
+      theme, themeLabel: theme === 'light' ? 'Dark mode' : 'Light mode', toggleTheme: () => this.setState({ theme: theme === 'light' ? 'dark' : 'light' }),
+      clock: this.clock(s.t), playLabel: simDown ? 'Frozen' : (s.playing && this.props.live !== false ? 'Pause' : 'Play'),
+      togglePlay: () => this.setState(x => ({ playing: !x.playing })),
+      health, mode: crisis ? { label: 'Crisis', reason: 'Dhaka spike ×1.8', c: 'var(--urgent)' } : { label: 'Normal', reason: 'All within plan', c: 'var(--safe)' },
+      trucks: trucks.length, incidents,
+      auto: { track: autoOn ? 'var(--accent)' : 'var(--line)', knob: autoOn ? '20px' : '3px', state: simDown ? 'Paused' : autoOn ? 'On' : 'Off', label: simDown ? 'No fresh data' : autoOn ? 'Safe decisions only' : 'Every shipment needs you' },
+      toggleAuto: () => this.setState(x => ({ autopilot: !x.autopilot })),
+      simDown,
+      isMap: s.view === 'map', isTable: s.view === 'table', tabMap: tab(s.view === 'map'), tabTable: tab(s.view === 'table'),
+      showMap: () => this.setState({ view: 'map' }), showTable: () => this.setState({ view: 'table' }),
+      mapRef: this.mapRef, layerTf: `translate(${z.x}px, ${z.y}px) scale(${z.k})`, inv: 1 / z.k, cursor: s.dragging ? 'grabbing' : 'grab',
+      panStart: e => { this.drag = { x: e.clientX, y: e.clientY, zx: z.x, zy: z.y }; this.moved = false; },
+      panMove: e => { if (!this.drag) return; const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y; if (!this.moved && Math.abs(dx) + Math.abs(dy) < 4) return; this.moved = true; this.setState(x => ({ dragging: true, hover: null, z: this.clamp({ k: x.z.k, x: this.drag.zx + dx, y: this.drag.zy + dy }) })); },
+      panEnd: () => { this.drag = null; if (s.dragging) this.setState({ dragging: false }); setTimeout(() => { this.moved = false; }, 0); },
+      zoomIn: () => this.zoomAt(1.4), zoomOut: () => this.zoomAt(1 / 1.4), zoomReset: () => this.setState({ z: { k: 1, x: 0, y: 0 } }),
+      mapSvg: this.mapSvg(demo, trucks), nodes, tip,
+      stations: stations.map(st => ({ name: st.name, nextOrder: st.nextOrder, fuels: st.fuels.map(f => ({ pct: pct(f.lvl, f.cap), lvl: fmt(f.lvl) + ' L', c: lvlColor(pctN(f.lvl, f.cap)) })), click: () => this.setState({ drawer: st.id }) })),
+      depots: DEPOTS.map(d => ({ name: d.name, shipShort: d.shipShort, fuels: d.fuels.map(f => ({ pct: pct(f.lvl, f.cap), lvl: fmt(f.lvl / 1000) + 'k L', c: lvlColor(pctN(f.lvl, f.cap)) })), click: () => this.setState({ drawer: d.id }) })),
+      roads: ROADS.map(r => { const sched = crisis && r.id === 'patiya-coxs'; return { name: r.name, type: r.main ? 'Main' : 'Backup', travel: r.min + ' min', maxL: fmt(r.max) + ' L', status: sched ? 'Closes 18:00' : 'Open', c: sched ? 'var(--urgent)' : 'var(--safe)' }; }),
+      queue, queueEmpty: queue.length === 0, queueCount: queue.length ? `${queue.length} actions waiting` : 'Nothing waiting',
+      log,
+      drawerOpen: !!s.drawer, dr, closeDrawer: () => this.setState({ drawer: null }),
+      recOpen: !!rr, rec, closeRec: () => this.setState({ rec: null, ask: null }), stop: e => e.stopPropagation(),
+      askWhy: () => rr && this.askQ(rr, 'why'), askShow: !!(s.ask && rr), askText: s.ask ? (s.ask.loading ? 'Reading engine data…' : s.ask.text) : '', aiBadge,
+      editing: s.editing, editQtyL: fmt(s.editQty) + ' L', editLabel: s.editing ? 'Done' : 'Edit quantity',
+      toggleEdit: () => this.setState(x => ({ editing: !x.editing, editQty: x.editing ? x.editQty : (rr ? rr.qty : 0) })),
+      qtyDown: () => this.setState(x => ({ editQty: Math.max(500, x.editQty - 500) })),
+      qtyUp: () => this.setState(x => ({ editQty: Math.min(rr ? rr.maxL : 99999, x.editQty + 500) })),
+      approveLabel: simDown ? 'Approve (held)' : 'Approve',
+      approve: () => rr && this.decide(rr, 'approve', simDown), reject: () => rr && this.decide(rr, 'reject', simDown),
+      logOpen: !!L, lg, closeLog: () => this.setState({ logId: null }),
+      toastShow: !!s.toast, toast: s.toast,
+    };
+  }
+
+  askQ(r, q) {
+    clearTimeout(this.askT);
+    const aiDown = this.demo() === 'AI down';
+    this.setState({ ask: { q, loading: true } });
+    this.askT = setTimeout(() => this.setState({ ask: { q, loading: false, text: aiDown ? r.tpl : (q === 'why' ? r.ai.why : r.ai[q]) } }), 800);
+  }
+
+  decide(r, kind, simDown) {
+    const s = this.state, t = this.clock(s.t).replace(' · ', ' '), hm = t.split(' ').pop();
+    const qty = s.editing ? s.editQty : r.qty;
+    const entry = kind === 'approve'
+      ? { id: r.id, roadId: simDown ? null : r.roadId, title: `${r.title} · ${fmt(qty)} L`, actor: 'Operator', taken: t, status: simDown ? 'Held' : 'Departing', c: simDown ? 'var(--watch)' : 'var(--accent)', done: 1,
+          steps: [hm, '—', '~' + r.arrives, '—'], summary: r.ai.why, tpl: r.tpl,
+          state: [[r.fuel, `${fmt(r.level)} L (${pct(r.level, r.cap)})`], ['Empty at', r.emptyAt], ['Demand', r.demandNow]], check: `Arrival predicted ${r.arrives}`, verdict: 'Waiting', vc: 'var(--faint)' }
+      : { id: r.id, title: `${r.title} · ${fmt(r.qty)} L`, actor: 'Operator', taken: t, status: 'Rejected', c: 'var(--faint)', done: 1, steps: [hm, '—', '—', '—'],
+          summary: `Rejected by the operator. Without it the station is projected to run empty at ${r.emptyAt}.`, tpl: r.tpl,
+          state: [[r.fuel, `${fmt(r.level)} L (${pct(r.level, r.cap)})`], ['Empty at', r.emptyAt], ['Demand', r.demandNow]], check: `Projected unserved ${fmt(r.unserved)} L`, verdict: 'Not sent', vc: 'var(--faint)' };
+    this.setState(x => ({ handled: { ...x.handled, [r.id]: kind }, extraLog: [entry, ...x.extraLog], rec: null, ask: null, editing: false }));
+    this.notify(kind === 'approve' ? (simDown ? 'Approved. It will send when the simulator responds.' : `Sent ${fmt(qty)} L. Tracking in the action log.`) : 'Rejected and logged.');
+  }
+}
+</script>
+</body>
+</html>

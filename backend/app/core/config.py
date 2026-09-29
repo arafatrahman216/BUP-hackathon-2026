@@ -47,9 +47,11 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 10
 
     # --- Database ---
-    # Optional full override (tests use SQLite). Empty -> built from the SUPABASE_* values.
+    # Full SQLAlchemy URL. Docker Compose sets it to the local `db` Postgres container.
+    # Empty -> built from the SUPABASE_* values (legacy option). Tests use SQLite.
     DATABASE_URL: str = ""
     DB_ECHO: bool = False
+    DB_COMMAND_TIMEOUT_SECONDS: float = 10.0  # Postgres query timeout
 
     # --- Rate limiting (in-memory, per client IP) ---
     RATE_LIMIT_ENABLED: bool = True
@@ -111,6 +113,21 @@ class Settings(BaseSettings):
     EXPLAIN_MAX_TOKENS: int | None = None
     EXPLAIN_PROFILES_PATH: str = ""  # "" -> app/explainability/profiles.json
     EXPLAIN_HISTORY_LIMIT: int = 500  # demand-history rows read per question (max 2000)
+
+    DEMO_MASK_ERRORS: bool = True  # never show errors on the dashboard: backup data + "ERROR MASKED" log line
+
+    # --- Intelligence (intelligence-plan.md §0.1) ---
+    PREDICTOR: str = "structural"  # structural | moving_average (baseline)
+    PLANNER: str = "optimizer"  # optimizer (strategic LP + MIP-MPC) | rules (baseline, always the fallback)
+    FORECAST_HORIZON_TICKS: int = 24  # simulator-copy and MIP horizon (6 h at 15-min ticks)
+    HISTORY_FETCH_ROWS: int = 1200  # demand-history rows read per tick (API max 2000)
+    PLANNER_TIME_LIMIT_SECONDS: float = 2.0
+    RATIONING_TRIGGER_DAYS: float = 3.0  # ration a fuel when the network has less than this left
+    MIN_CONFIDENCE_AUTO: float = 0.5  # below this a recommendation needs the operator
+    ANOMALY_Z: float = 3.0  # single-tick z-score threshold (needs 2 ticks in a row)
+    ANOMALY_CUSUM_K: float = 0.05  # CUSUM slack on log(actual/forecast)
+    ANOMALY_CUSUM_H: float = 0.5  # CUSUM alarm level
+    ANOMALY_MIN_LITERS: float = 20.0  # ignore ticks with less demand (night noise)
 
     @property
     def supabase_project_ref(self) -> str:

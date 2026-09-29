@@ -10,6 +10,8 @@ class DashboardState(BaseModel):
     sim: dict[str, Any]
     pipeline: dict[str, Any]
     alerts: list[dict[str, Any]]
+    incidents: list[dict[str, Any]] = []
+    outlook: dict[str, Any] = {}
     blocked: list[dict[str, Any]]
     recommendations: dict[str, list[dict[str, Any]]]
     stations: list[dict[str, Any]]

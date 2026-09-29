@@ -3,6 +3,7 @@ import json
 import pytest
 
 from app.ai import get_llm_client
+from app.core.config import get_settings
 from app.explainability import METRICS, MetricContext, Snapshot, Subject, build_context, load_profiles
 from app.pipeline.types import World
 from tests.conftest import FakeProvider, make_client
@@ -197,3 +198,14 @@ async def test_simulator_down_after_a_run_explains_from_cache(client, fake_sim, 
     assert response.status_code == 200, response.text
     notes = response.json()["context"]["_meta"]["notes"]
     assert any("longer demand history unavailable" in n for n in notes)
+
+
+async def test_posted_action_explains_its_truck_and_the_models_forecast(client, fake_sim):
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800  # watch -> auto-posted
+    await client.post("/api/v1/pipeline/run")
+    rec = next(r for r in (await client.get("/api/v1/recommendations")).json()["items"] if r["status"] == "POSTED")
+    ctx = (await client.post("/api/v1/explain/context", json={"profile": "recommendation",
+                                                               "recommendation_id": rec["id"]})).json()["context"]
+    assert ctx["allocation"]["id"] == rec["allocation_id"] and ctx["allocation"]["status"] == "PENDING"
+    assert ctx["risk_rules"]["predictor"] == get_settings().PREDICTOR
+    assert "p_stockout" in ctx["forecast"]["DIESEL"] and "demand_next_ticks_l" in ctx["forecast"]["DIESEL"]

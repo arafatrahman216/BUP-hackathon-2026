@@ -52,6 +52,13 @@ def _forecast(f: Forecast) -> dict[str, Any]:
         "lead_ticks": f.lead_ticks, "margin_ticks": _r(f.cover_ticks - f.lead_ticks)
         if f.cover_ticks is not None and f.lead_ticks is not None else None,
         "unmet_last_tick_l": _r(f.unmet_last_tick), "predictor": f.source,
+        # structural predictor (simulator copy); None for the moving-average baseline
+        "p_stockout": f.p_stockout, "confidence": f.confidence,
+        "expected_unmet_next_horizon_l": _r(f.unmet_horizon), "tank_overflow_next_horizon_l": _r(f.tank_overflow_horizon),
+        "order_by_tick": f.order_by_tick, "refill_from_tick": f.refill_from_tick,
+        "ticks_until_empty_at_current_rate": _r(f.naive_ticks_until_empty),
+        "daily_avg_rate_l_per_tick": _r(f.daily_rate_per_tick),
+        "demand_next_ticks_l": [_r(x) for x in f.demand_path[:8]],
     }
 
 
@@ -73,6 +80,23 @@ def action(ctx: MetricContext) -> Any:
     return ctx.subject.action
 
 
+@metric("allocation", description="What happened to the shipment the action created: status, departure, arrival, failure")
+def allocation(ctx: MetricContext) -> Any:
+    a = ctx.subject.action or {}
+    alloc_id = a.get("allocation_id") if a.get("kind") == "recommendation" else a.get("id") if a.get("kind") == "allocation" else None
+    if alloc_id is None:
+        return None
+    found = next((x for x in ctx.world.allocations if x.get("id") == alloc_id), None)
+    if found is None:
+        return {"id": alloc_id, "note": "not in the simulator's current allocation list"}
+    keys = ("id", "status", "quantity", "created_tick", "departure_tick", "expected_arrival_tick",
+            "actual_arrival_tick", "failure_reason")
+    out = {k: found.get(k) for k in keys}
+    if found.get("actual_arrival_tick") is not None and found.get("expected_arrival_tick") is not None:
+        out["arrival_delay_ticks"] = found["actual_arrival_tick"] - found["expected_arrival_tick"]
+    return out
+
+
 # ---------- predict / detect output (the pipeline's own numbers) ----------
 
 @metric("forecast", description="Predict stage output for the station: rate, cover, lead time, margin, risk")
@@ -91,16 +115,27 @@ def forecast(ctx: MetricContext) -> Any:
                                   "with this station's thresholds and verdict")
 def risk_rules(ctx: MetricContext) -> Any:
     r = ctx.rules
+    structural = r.get("PREDICTOR") == "structural"
     out: dict[str, Any] = {
+        "predictor": r.get("PREDICTOR"), "planner": r.get("PLANNER"),
         "risk": (f"urgent if cover < lead + {r.get('URGENT_MARGIN_TICKS')} ticks; watch (reorder) if cover < lead + "
-                 f"{r.get('SAFETY_TICKS')} ticks; otherwise safe. cover = (inventory + incoming) / rate, rate = mean "
-                 f"demand of the last {r.get('FORECAST_WINDOW_TICKS')} ticks"),
-        "shipment": (f"only watch/urgent get a shipment: fastest AVAILABLE route; quantity = min(free space after incoming, "
-                     f"route max, depot stock - {r.get('DEPOT_RESERVE_LITERS')} L reserve, depot dispatch left this tick), "
-                     f"floored to 100 L, at least {r.get('MIN_SHIPMENT_LITERS')} L; skipped if one is already open"),
-        "operator_review": ("urgent risk, backup route, depot not OPEN, an ACTIVE crisis touching the station/region/"
-                            "depot/route" + ("" if r.get("AUTO_POST_ENABLED", True) else ", or auto-post disabled (it is)")
+                 f"{r.get('SAFETY_TICKS')} ticks; otherwise safe. "
+                 + (f"cover = ticks until empty on the forecast demand path (time-of-day demand model + simulator copy, "
+                    f"{r.get('FORECAST_HORIZON_TICKS')}-tick horizon), counting incoming trucks"
+                    if structural else
+                    f"cover = (inventory + incoming) / rate, rate = mean demand of the last {r.get('FORECAST_WINDOW_TICKS')} ticks")),
+        "shipment": ((f"optimizer: plans shipments over the {r.get('FORECAST_HORIZON_TICKS')}-tick horizon to minimise "
+                      f"unserved demand within route max, depot stock, dispatch limits and tank room; the rule planner is the fallback"
+                      if r.get("PLANNER") == "optimizer" else
+                      f"only watch/urgent get a shipment: fastest AVAILABLE route; quantity = min(free space after incoming, "
+                      f"route max, depot stock - {r.get('DEPOT_RESERVE_LITERS')} L reserve, depot dispatch left this tick), "
+                      f"floored to 100 L, at least {r.get('MIN_SHIPMENT_LITERS')} L")
+                     + "; skipped if one is already open for the station/fuel"),
+        "operator_review": (f"forecast confidence below {r.get('MIN_CONFIDENCE_AUTO')}, rationing over a station's fair share, "
+                            "urgent risk, backup route, depot not OPEN, an ACTIVE crisis touching the station/region/"
+                            "depot/route, stale data" + ("" if r.get("AUTO_POST_ENABLED", True) else ", or auto-post disabled (it is)")
                             + " -> PENDING_APPROVAL; otherwise auto-posted"),
+        "rationing": f"a fuel is rationed when the network has less than {r.get('RATIONING_TRIGGER_DAYS')} days of it left",
         "expiry": f"open recommendations expire after {r.get('APPROVAL_TTL_TICKS')} ticks and {r.get('APPROVAL_MIN_SECONDS')} s",
     }
     st = _subject_station(ctx)
@@ -341,3 +376,18 @@ def network_overview(ctx: MetricContext) -> Any:
         "stations_not_open": not_normal(w.stations, "OPEN"), "depots_not_open": not_normal(w.depots, "OPEN"),
         "routes_not_available": not_normal(w.routes, "AVAILABLE"),
     }
+
+
+@metric("outlook", description="Predictor outlook: network fuel left, rationing, depot overflow, cost of doing nothing")
+def outlook(ctx: MetricContext) -> Any:
+    return ctx.snapshot.outlook or None
+
+
+@metric("planner", description="The last planner run: which planner, status, budgets")
+def planner(ctx: MetricContext) -> Any:
+    return ctx.snapshot.planner_info or None
+
+
+@metric("incidents", description="Detector incidents: related alerts grouped into one story")
+def incidents(ctx: MetricContext) -> Any:
+    return ctx.snapshot.incidents or None

@@ -38,6 +38,7 @@ RECOMMENDATION_PROFILE = "recommendation"
 RULE_SETTINGS = (
     "FORECAST_WINDOW_TICKS", "SAFETY_TICKS", "URGENT_MARGIN_TICKS", "MIN_SHIPMENT_LITERS", "DEPOT_RESERVE_LITERS",
     "AUTO_POST_ENABLED", "APPROVAL_TTL_TICKS", "APPROVAL_MIN_SECONDS", "STALE_DATA_MODE", "STALE_QUANTITY_FACTOR",
+    "PREDICTOR", "PLANNER", "FORECAST_HORIZON_TICKS", "MIN_CONFIDENCE_AUTO", "RATIONING_TRIGGER_DAYS",
 )
 SIM_ERRORS = (SimulatorError, SimulatorRejection)
 
@@ -169,14 +170,17 @@ class ExplainService:
         if st.world is not None:
             age = time.time() - st.world_read_at if st.world_read_at else None
             forecasts = st.forecasts or self.predictor.predict(st.world)
-            return Snapshot(st.world, forecasts, list(st.alerts), list(st.blocked), "pipeline_cache", age)
+            incidents = list(reversed(st.detector.incidents[-10:])) if st.detector else []
+            return Snapshot(st.world, forecasts, list(st.alerts), list(st.blocked), "pipeline_cache", age,
+                            outlook=dict(st.outlook), planner_info=dict(st.planner_info), incidents=incidents)
         try:
             world = await read_world(self.sim, self.settings)
         except SIM_ERRORS as exc:
             raise ServiceUnavailableError(f"Simulator is unreachable and there is no cached state: {exc}",
                                           code="SIMULATOR_UNAVAILABLE") from exc
         forecasts = self.predictor.predict(world)
-        return Snapshot(world, forecasts, detect(world) + stockout_alerts(forecasts), [], "live", 0.0)
+        return Snapshot(world, forecasts, detect(world) + stockout_alerts(forecasts), [], "live", 0.0,
+                        outlook=dict(getattr(self.predictor, "outlook", {}) or {}))
 
     async def _action(self, req: ContextRequest, snapshot: Snapshot) -> dict[str, Any] | None:
         if req.action is not None:
