@@ -9,8 +9,11 @@ export function nodeKey(id = '') {
   return k === 'coxsbazar' ? 'coxs' : k
 }
 
-/** "Mirpur Fuel Station" → "Mirpur", "Gazipur Depot" → "Gazipur". */
-export const shortName = (name = '') => name.replace(/\s+(Fuel Station|Station|Depot)$/i, '')
+const DISPLAY = { mirpur: 'Mirpur', tongi: 'Tongi', karnaphuli: 'Karnaphuli', coxs: "Cox's Bazar", gazipur: 'Gazipur', patiya: 'Patiya' }
+
+/** Display name: the known short name for this id, else the API name without "Station"/"Depot". */
+export const shortName = (name = '', id = '') =>
+  DISPLAY[nodeKey(id)] ?? name.replace(/\s+(Fuel Station|Station|Depot)$/i, '')
 
 /** "region-chattogram" → "Chattogram" */
 export const regionName = (id = '') => {

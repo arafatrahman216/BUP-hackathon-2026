@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { aiApi, recommendationsApi } from '../api/api'
 import { DEMO_LOOP, DEMO_START, DEMO_STATES, buildDemoModel, demoDecisionEntry } from '../utils/console/demo'
 import { fmt } from '../utils/console/format'
-import { ASK_SYSTEM, askPrompt, isGrounded } from '../utils/console/grounding'
+import { ASK_SYSTEM, askPrompt, isComplete, isGrounded } from '../utils/console/grounding'
 import { buildLiveModel } from '../utils/console/live'
 import { useDashboard } from './useDashboard'
 
@@ -11,6 +11,8 @@ const DEMO_TICK_MS = 3000
 const THEME_KEY = 'fuelops.theme'
 const AI_BADGE = 'Written by AI'
 const TEMPLATE_BADGE = 'Template text · AI unavailable'
+// Gemini 2.5 counts hidden "thinking" tokens against this budget: 220 cut answers mid-sentence
+const AI_MAX_TOKENS = 1024
 
 function readTheme() {
   try {
@@ -116,9 +118,9 @@ export function useConsole() {
         return { text: question === 'why' ? rec.why : rec.answers?.[question] ?? rec.why, badge: `${AI_BADGE} (Gemini)` }
       }
       try {
-        const res = await aiApi.generate({ prompt: askPrompt(rec.facts, question), system: ASK_SYSTEM, max_tokens: 220, temperature: 0.2 })
+        const res = await aiApi.generate({ prompt: askPrompt(rec.facts, question), system: ASK_SYSTEM, max_tokens: AI_MAX_TOKENS, temperature: 0.2 })
         const text = (res?.text || '').trim()
-        if (text && isGrounded(text, rec.facts)) {
+        if (isComplete(text) && isGrounded(text, rec.facts)) {
           const provider = res.provider ? res.provider.charAt(0).toUpperCase() + res.provider.slice(1) : null
           return { text, badge: provider ? `${AI_BADGE} (${provider})` : AI_BADGE }
         }
