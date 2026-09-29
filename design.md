@@ -3,7 +3,7 @@
 This is the single source of truth for how this project is built. It covers what lives
 in each folder, the conventions to follow, and a log of design decisions.
 **Coding agents: read this before writing code, and add to the decision log whenever you
-make a new design choice (frontend or backend).**
+make a new design choice.**
 
 Feature requirements live in [features.md](features.md).
 
@@ -17,24 +17,23 @@ Feature requirements live in [features.md](features.md).
 | Database | Supabase Postgres (via `asyncpg`, session pooler) |
 | Files    | Supabase Storage (REST API via `httpx`), as a repository with no routes |
 | AI       | Gemini, Groq, OmniRoute behind one `LLMClient` with an env-configured fallback chain |
-| Frontend | Vite + React 19 (JavaScript), react-router 7, CSS Modules, Vitest |
-| Run      | Docker + Docker Compose (hot reload for both apps) |
+| Run      | Docker + Docker Compose (hot reload) |
 
 ## 2. Repository layout
 
 ```
 .
 ├── backend/              FastAPI app (see §3)
-├── frontend/             Vite React app (see §5)
 ├── slide/                presentation material
-├── docker-compose.yml    runs backend + frontend
+├── docker-compose.yml    runs the backend
 ├── design.md             this file
 ├── features.md           feature list the agent builds from
 └── CLAUDE.md             entry point for Claude Code (points here)
 ```
 
-The template ships **no demo business resources**. The only routes are `GET /health` and
-the `/ai` endpoints. Everything else gets built from features.md.
+The project is **backend-only** (no frontend). The template ships no demo business
+resources: the only routes are `GET /health` and the `/ai` endpoints. Everything else gets
+built from features.md.
 
 ## 3. Backend
 
@@ -203,55 +202,23 @@ data  = await self.llm.complete_json('Return {"tags": [string]} for: ...')  # pa
 
 Not implemented yet: streaming responses, tool/function calling.
 
-## 5. Frontend (`frontend/`)
-
-Vite + React 19 (JavaScript), react-router 7, CSS Modules, Vitest + Testing Library.
-The template is intentionally minimal: one Home page showing backend health and the AI
-providers, plus a 404 page.
-
-### 5.1 Folder by folder (`frontend/src/`)
-
-| Folder / file | What it holds | Rules |
-|---|---|---|
-| `api/api.js` | **The only module that talks HTTP.** Base URL from `VITE_API_BASE_URL`; `request()` wraps fetch (JSON or FormData bodies, query params, timeouts, Bearer token); every failure becomes an `ApiError` (`status, code, message, details, requestId, retryAfter`, plus `fieldErrors` for forms); on a 401 it clears the token and fires `auth:unauthorized`. Endpoint groups: `healthApi`, `aiApi`. | Components never call `fetch` directly. Add a `<feature>Api` group here. |
-| `hooks/` | `useAsync` (loads data: `data/error/loading/refetch`, cancels stale requests) and `useAuth`. Re-exported from `hooks/index.js`. | Put data logic in hooks (e.g. `useOrders`), not inline in pages. |
-| `context/` | `AuthContext` + `AuthProvider` (token state synced with `api.js`), and `AppProviders`, which wraps the router and every provider. | Add new app-wide providers in `AppProviders`. |
-| `components/ui/` | Reusable primitives, each with its own `.module.css`: `Button`, `Card`, `Spinner`. Exported from `components/ui/index.js`. | No data fetching in here. Add new primitives here. |
-| `components/layout/` | `AppLayout`: header with nav, and `<Outlet/>` for pages. | Add nav links here. |
-| `pages/<Name>/` | One folder per page: `<Name>Page.jsx` + `.module.css` + page-only components. Now: `Home`, `NotFound`. | Register the route in `App.jsx`. |
-| `styles/global.css` | Design tokens as CSS variables (colors, spacing, radius, fonts), light and dark via `prefers-color-scheme`, and the reset. | Use the tokens. Don't hard-code colors. |
-| `utils/` | `cn()` classnames helper. | |
-| `test/` | Vitest setup, `renderWithProviders`, `jsonResponse`. Tests sit next to their code (`*.test.js(x)`). | |
-
-### 5.2 Adding a frontend feature
-
-1. Add an endpoint group to `api/api.js` (e.g. `ordersApi`).
-2. Add a hook in `hooks/` that wraps it with `useAsync`.
-3. Create `pages/Orders/OrdersPage.jsx` (+ `.module.css`) and build it from `components/ui`.
-4. Add the `<Route>` in `App.jsx` and a nav link in `components/layout/AppLayout.jsx`.
-5. Show errors with `error.message`, or `error.fieldErrors` on forms. The backend error shape is already parsed.
-
-**Auth:** the backend has no auth yet. The plumbing is ready: `setToken()` / `useAuth().login(token)` store a token, `api.js` sends it as `Authorization: Bearer`, and a 401 logs the user out.
-
-## 6. Configuration
+## 5. Configuration
 
 - Backend: `backend/.env` (gitignored). The documented template is `backend/.env.example`, and every key is declared in `core/config.py`. Empty values fall back to the defaults.
-- Frontend: `frontend/.env` → `VITE_API_BASE_URL` (the backend base URL, including `/api/v1`).
-- Docker Compose reads both `.env` files. Ports can be overridden with `BACKEND_PORT` / `FRONTEND_PORT`.
+- Docker Compose reads `backend/.env`. The port can be overridden with `BACKEND_PORT`.
 
-## 7. Running
+## 6. Running
 
 ```bash
-docker compose up --build        # frontend :5173, backend :8000 (docs at /docs)
+docker compose up --build        # backend :8000 (docs at /docs)
 
 # or locally
 cd backend && python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/uvicorn app.main:app --reload
 .venv/bin/pytest
-cd frontend && npm install && npm run dev
 ```
 
-## 8. Decision log
+## 7. Decision log
 
 Add a row whenever a design choice is made. Newest at the bottom.
 
@@ -260,14 +227,12 @@ Add a row whenever a design choice is made. Newest at the bottom.
 | 2026-09-29 | Backend | Layered structure: controllers → services → repositories → models; schemas for I/O | Clear place for everything |
 | 2026-09-29 | Backend | Async SQLAlchemy 2.0 + `create_all` on startup, no Alembic | Hackathon speed; add migrations if the schema stabilizes |
 | 2026-09-29 | Backend | Repositories commit their own writes | Commit happens before the response is sent; simple mental model |
-| 2026-09-29 | Backend | One JSON error shape for every error; successful responses are unwrapped | Frontend handles errors in one place; OpenAPI stays accurate |
+| 2026-09-29 | Backend | One JSON error shape for every error; successful responses are unwrapped | Clients handle errors in one place; OpenAPI stays accurate |
 | 2026-09-29 | Backend | In-memory rate limiter on AI prefixes, counting non-GET requests only | Protects free-tier AI quotas; swap for Redis if running multiple instances |
 | 2026-09-29 | AI | Direct REST calls via `httpx` instead of vendor SDKs | Fewer dependencies, one error-handling path, easy to add providers |
 | 2026-09-29 | AI | Provider chain + fallback flag in env; repeats = retries; `provider:model` pins | User requirement: configurable fallback and order |
 | 2026-09-29 | Database | **Supabase** Postgres, URL built from `SUPABASE_*` vars; session pooler because the direct host is IPv6-only | User requirement; must work from Docker |
 | 2026-09-29 | Storage | Supabase Storage through `StorageRepository` (REST), service-role key server-side only, no routes by default | Ready for features that need uploads; keeps secrets off the client |
-| 2026-09-29 | Template | **No demo resources** (no Items/Files APIs or pages); only health + AI routes and a single Home page | User requirement: leftover demo files and routers could cause bugs in the real project |
-| 2026-09-29 | Frontend | Plain CSS Modules + CSS-variable design tokens, no UI kit, no icon library | Minimal and easy to restyle |
-| 2026-09-29 | Frontend | All HTTP through `api/api.js`; one `ApiError` type; data through hooks | One place for base URL, auth and error parsing; pages stay simple |
-| 2026-09-29 | Frontend | Backend URL in `frontend/.env` (`VITE_API_BASE_URL`) | Switch backends without code changes |
+| 2026-09-29 | Template | **No demo resources** (no Items/Files APIs); only health + AI routes | User requirement: leftover demo files and routers could cause bugs in the real project |
 | 2026-09-29 | DevOps | Docker Compose with source mounts + hot reload; no local DB container | One command to run everything; DB is hosted |
+| 2026-09-29 | Scope | **No frontend**: the project is backend-only | User decision for the BUP Fuel Supply Simulator challenge |
