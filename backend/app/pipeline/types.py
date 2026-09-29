@@ -62,6 +62,9 @@ class Alert:
     code: str
     message: str
     entity_id: str | None = None
+    explained_by: str | None = None  # "event 3 (demand_spike)" when a known crisis explains it
+    since_tick: int | None = None  # first tick this alert was active (set by the Detector)
+    region_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -81,6 +84,17 @@ class Forecast:
     risk: str  # safe | watch | urgent | outage | unknown
     unmet_last_tick: float = 0.0
     source: str = "moving_average"
+    # --- structural predictor + simulator copy (None/empty for the moving-average baseline) ---
+    naive_ticks_until_empty: float | None = None  # straight line: (inventory + incoming) / current rate
+    p_stockout: float | None = None  # chance of running dry within the horizon (normal approximation)
+    unmet_horizon: float | None = None  # liters we expect to lose within the horizon if we do nothing
+    tank_overflow_horizon: float | None = None  # liters lost because incoming trucks don't fit
+    order_by_tick: int | None = None  # latest tick to create a shipment that lands before empty
+    refill_from_tick: int | None = None  # earliest tick a full truck fits on arrival
+    confidence: float | None = None  # 0..1
+    cv: float | None = None  # relative forecast error per tick
+    daily_rate_per_tick: float | None = None  # time-of-day averaged rate x current multiplier
+    demand_path: list[float] = field(default_factory=list)  # forecast liters for the next H ticks
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -99,6 +113,9 @@ class Plan:
     ticks_until_empty: float | None
     reasons: list[str] = field(default_factory=list)  # why it is "important" (empty -> auto)
     planner: str = "rules"
+    confidence: float | None = None
+    over_budget: bool = False  # rationing: more than this station's fair share
+    impact: dict[str, Any] = field(default_factory=dict)  # with/without numbers from the simulator copy
 
 
 @dataclass

@@ -10,9 +10,17 @@ from app.models import Base
 settings = get_settings()
 
 _url = settings.database_url
-# Supabase's session pooler caps connections per project, so keep the pool small.
-_pool = {} if _url.startswith("sqlite") else {"pool_size": 5, "max_overflow": 5}
-engine = create_async_engine(_url, echo=settings.DB_ECHO, pool_pre_ping=True, **_pool)
+if _url.startswith("sqlite"):
+    _options: dict = {}
+else:
+    _options = {
+        # small pool: also fits Supabase's session pooler, which caps connections per project
+        "pool_size": 5, "max_overflow": 5,
+        "pool_recycle": 300,  # replace idle connections before a network middlebox drops them
+        # asyncpg: a query on a dead connection fails after N s instead of hanging forever
+        "connect_args": {"command_timeout": settings.DB_COMMAND_TIMEOUT_SECONDS},
+    }
+engine = create_async_engine(_url, echo=settings.DB_ECHO, pool_pre_ping=True, **_options)
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

@@ -31,6 +31,18 @@ built in hackathon time, and does it use something about this simulator that mos
 
 ---
 
+## 0.1 Confirmed method choices (2026-09-29)
+
+| Step | Choice | In short |
+|---|---|---|
+| **Detect** | **Full set, built in order**: D3 → D1 → D2 → D4 → D5 → D7 → D6 | Data/clock checks first; demand anomalies = **z-score (single tick) + CUSUM (running total)** on actual ÷ forecast, where the forecast already includes the multiplier; each alert labelled "explained by crisis #x" or "unexplained"; alerts deduplicated, auto-resolved and grouped into incidents |
+| **Predict demand** | **One structural model + a benchmark** | Published pattern (prior) blended with an EWMA per station × fuel × hour, × live multiplier; the hourly shape is **shared across the 3 fuels of a station**. EWMA / structural state-space / LightGBM / naive run **only on the test bench** as a WAPE comparison table (horizons 1/4/24 ticks) |
+| **Predict stockout** | **Deterministic copy of the simulator** | All published rules (tank and depot overflow, dispatch cap, outages, scheduled crises). Risk % from a normal approximation of the forecast error. P2–P7 are queries on the copy. Monte Carlo is only an optional flag |
+| **Decide** | **Two-level plan + fallback** | (1) **Strategic daily LP** over the remaining days: splits all remaining fuel across stations (equal days of cover, cross-region transfers), turned on when P5 detects exhaustion, and outputs target end inventories. (2) **Tactical MIP-MPC, 6 h**, re-planned every tick. (3) **Fallback: priority greedy + reorder point** |
+| **Explain** | *Deferred* | Revisit later (see §5) |
+
+---
+
 ## 1. Core idea: "anticipate, don't react", powered by our own copy of the simulator
 
 We take the **main pick from intelligence-cases.md §7**. It's the same engine as the tank and depot
@@ -51,8 +63,8 @@ We check the copy against the real simulator every tick. How far it drifts is it
 ### Build
 | # | What | Why it's kept |
 |---|---|---|
-| P1 | **Demand forecast that knows the time of day:** published pattern + blended with real data + current multiplier. Learns from `demand_liters` (true demand), not `served_liters` | Everything else depends on it. The time-of-day part matters: Tongi swings 3.4× between day and night |
-| P2 | **Time until empty + risk %** per station and fuel. Shown **next to the naive straight-line estimate** | Core warning. The side-by-side shows why our estimate is better |
+| P1 | **Demand forecast that knows the time of day:** published pattern + blended with real data + current multiplier. Learns from `demand_liters` (true demand), not `served_liters`. Divide the multiplier out of history before learning; the hourly shape is shared across a station's 3 fuels. Other methods (naive, EWMA, structural state-space, LightGBM) are benchmarked on the test bench only | Everything else depends on it. The time-of-day part matters: Tongi swings 3.4× between day and night |
+| P2 | **Time until empty + risk %** per station and fuel, computed by the deterministic simulator copy. Risk % comes from a normal approximation of the forecast error (Monte Carlo is an optional flag). Shown **next to the naive straight-line estimate** | Core warning. The side-by-side shows why our estimate is better |
 | P3 | **Refill window:** the earliest tick a truckload fits in the tank, and the **latest safe order time** | Clear for operators ("order by 15:30"). Prevents both overflow and stockouts |
 | P4 | **Depot overflow forecast:** "ship arrives in 6 ticks, room for 0 L, move 12,000 L out first" | Directly recovers wasted fuel (73,000 L in the no-action run) |
 | P5 | **Fuel runs out network-wide:** for each fuel, the day the whole network runs out (total supply + stock vs forecast demand) | Tells us when to switch to rationing. Petrol goes first |
@@ -79,7 +91,7 @@ We check the copy against the real simulator every tick. How far it drifts is it
 | # | What | Why it's kept |
 |---|---|---|
 | D1 | **Change detection each tick:** roads, stations, depots, multipliers, new or scheduled crises, plus **silent supply changes** (a ship's amount shrank or its tick moved) with a **crisis countdown** | Catches every crisis type, including ones announced in advance |
-| D2 | **Unusual demand:** single-tick check + running-total check, alerting after 2+ ticks, which estimates the spike size. Also flags **demand changes with no crisis behind them** | Covers "anomalous demand" in the brief's §7 list and catches hidden changes |
+| D2 | **Unusual demand:** single-tick check (z-score) + running-total check (CUSUM) on actual ÷ forecast, where the forecast already includes the multiplier, alerting after 2+ ticks, which estimates the spike size. A minimum-liters guard stops false alarms at night. Also flags **demand changes with no crisis behind them** | Covers "anomalous demand" in the brief's §7 list and catches hidden changes |
 | D3 | **Data and clock checks:** stale flag, impossible values, unknown IDs, tick going backwards (reset → resync), skipped or frozen ticks → **hold decisions and show "stale"** | Resilience requirement (brief §11): invalid simulator response → reject + alert |
 | D4 | **Inventory reconciliation:** the change in fuel should equal arrivals − sold − shipped out. Leftovers are unexplained. This also **measures wasted fuel** at depots and tanks, using the audit log | Covers "abnormal inventory changes" in the brief. Cheap and distinctive |
 | D5 | **Single-route stations:** Tongi and Cox's Bazar have only one road → a permanently higher risk level, a bigger buffer, and a critical alert if their road is cut | Most teams will miss this. Cheap, and it drives better decisions |
@@ -106,8 +118,8 @@ We check the copy against the real simulator every tick. How far it drifts is it
 ### Build
 | # | What | Why it's kept |
 |---|---|---|
-| X1 | **Rolling planner:** plan 6 h ahead, send only what's needed now, replan every tick. An optimizer is the main method, with the **reorder-point rule as the backup** and benchmark | Standard, proven approach. The backup covers resilience (brief §11: model unavailable → fallback) |
-| X2 | **Updated planner goal for a finite world:** (1) least unserved demand, (2) **zero waste** (depot and tank overflow count as heavy penalties), (3) balanced hours of fuel left across stations, (4) short roads as a tie-breaker | Matches §0: after day 2, waste and distribution decide the score |
+| X1 | **Two-level rolling planner.** *Strategic:* a daily LP over the remaining days splits all remaining fuel across stations (equal days of cover, cross-region transfers). It switches on when P5 detects exhaustion and passes target end inventories down. *Tactical:* a **MIP-MPC** plans 6 h ahead with integer trucks, a minimum truck size and the dispatch cap per depot across fuels. It sends only what's needed now and replans every tick. **Fallback and benchmark: priority greedy + reorder point** | The MIP alone can't see across days. The backup covers resilience (brief §11: model unavailable → fallback) |
+| X2 | **Updated planner goal for a finite world** (lexicographic): (1) least unserved demand, (2) **zero waste** (depot and tank overflow modelled as penalized variables, never as hard caps), (3) balanced hours of fuel left across stations, (4) short roads as a tie-breaker | Matches §0: after day 2, waste and distribution decide the score |
 | X3 | **Every rule respected**, including **fuel already on the way** when checking tank space, and the depot's sending limit per tick shared across all fuels. Big amounts split into several trucks | Nothing wasted and nothing refused |
 | X4 | **Act before scheduled crises:** fill up before a spike or road cut, especially **single-route stations before their road closes** | The heart of "anticipate, don't react" |
 | X5 | **Empty depots before ships arrive:** time shipments so each arriving ship has room, **using cross-region roads to spread fuel around**, not just as a backup | Recovers the 73,000 L of waste |
@@ -188,6 +200,6 @@ Refusal explanations ("Mirpur's tank has room for only 1,200 L"): a template doe
 3. Copy of the simulator + P6 ("vs doing nothing") + test bench, so everything after this is measured
 4. P4, P5, X5, X6: waste and rationing. **This is where the biggest score gains are.**
 5. D1, D2, D4, D5, D7 detection and incidents; P7, X4 anticipation
-6. The optimizer (X1–X3), which must beat the backup rule on the bench; then X7, X8
+6. The tactical MIP-MPC (X1–X3), which must beat the backup rule on the bench; then the strategic daily LP; then X7, X8
 7. X9 approvals, X10 + AI explanations, handover report
 8. Stretch goals if time allows: what-if tool first
