@@ -142,7 +142,8 @@ def risk_rules(ctx: MetricContext) -> Any:
                                 "between empty and the fastest truck landing, or demand still unserved with the shipment")
                                if r.get("REVIEW_RISK_ENABLED", True) else "")
                             + " -> PENDING_APPROVAL; otherwise auto-posted. An unanswered card auto-approves at a dynamic "
-                            "deadline once waiting would add unserved demand"),
+                            "deadline once waiting would add unserved demand, and never later than the tank still holding "
+                            f"(wait + transit + {r.get('DEADLINE_SAFETY_TICKS', 1)}) ticks of demand, so review never lets it run dry"),
         "rationing": f"a fuel is rationed when the network has less than {r.get('RATIONING_TRIGGER_DAYS')} days of it left",
         "expiry": f"open recommendations expire after {r.get('APPROVAL_TTL_TICKS')} ticks and {r.get('APPROVAL_MIN_SECONDS')} s",
     }
