@@ -385,16 +385,22 @@ class PipelineService:
             #  cost: waiting d ticks loses more than the tolerance;
             #  never dry: the tank must still hold (d + transit + DEADLINE_SAFETY_TICKS) x demand per tick,
             #  i.e. a truck leaving after the wait lands before the station runs out.
-            costs, cost_wait, dry_wait = [], None, None
+            rate = max(f.rate_per_tick or 0.0, 0.0)
+            level = project(world, demand, H).stations[(rec.station_id, rec.fuel_type)].mean_level  # no new truck
+            buffer = s.DEADLINE_SAFETY_TICKS * rate
+            dry_wait = None
+            for d in range(0, max(1, H - L)):  # a truck leaving after d ticks lands at tick d + L
+                if level[:d + L] and min(level[:d + L]) < buffer:
+                    dry_wait = d - 1  # -1: already too late to keep the buffer, approve now
+                    break
+            costs, cost_wait = [], None
             for d in range(0, max(1, H - L)):
                 proj = project(world, demand, H, [Shipment(d, rec.route_id, rec.fuel_type, rec.quantity)])
-                st_proj = proj.stations[(rec.station_id, rec.fuel_type)]
-                costs.append(st_proj.unmet)
-                if st_proj.stockout_k is not None and st_proj.stockout_k <= d + L + s.DEADLINE_SAFETY_TICKS:
-                    dry_wait = d - 1  # -1: already too late to avoid running dry, approve now
+                costs.append(proj.stations[(rec.station_id, rec.fuel_type)].unmet)
                 if costs[-1] - costs[0] > remaining:
                     cost_wait = d - 1
-                if cost_wait is not None or dry_wait is not None:
+                    break
+                if dry_wait is not None and d > dry_wait:
                     break
             ttl_left = max(0, s.APPROVAL_TTL_TICKS - (world.tick - rec.tick))
             limits = [x for x in (cost_wait, dry_wait) if x is not None]
@@ -404,7 +410,6 @@ class PipelineService:
             age = (datetime.now(timezone.utc) - created).total_seconds()
             free = len(costs) > 1 and costs[1] - costs[0] <= 0 and not never_dry_binds
             tps = state.ticks_per_second
-            rate = max(f.rate_per_tick or 0.0, 0.0)
             state.deadlines[rec.id] = {"tick": world.tick + wait_ticks,
                                        "seconds": round(wait_ticks / tps, 1) if tps else None,
                                        "tolerance_liters": round(tolerance), "lost_while_waiting": round(lost),

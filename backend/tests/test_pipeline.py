@@ -242,7 +242,7 @@ async def test_stale_data_skips_station_we_just_shipped_to(client, fake_sim):
 
 
 async def test_approval_is_refitted_to_the_current_world(client, fake_sim, manual_approval):
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 800  # 8 ticks of fuel: the card may wait
     rec = (await run(client))["recommendations"]["open"][0]
     assert rec["quantity"] == 7000
 
@@ -387,7 +387,7 @@ def test_circuit_breaker():
 async def test_expiry_needs_both_ticks_and_seconds(client, fake_sim, monkeypatch, manual_approval):
     from app.core.config import get_settings
 
-    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 800  # 8 ticks of fuel: the card may wait
     await run(client)
     fake_sim.world["instance"]["tick"] = 100 + 49  # past APPROVAL_TTL_TICKS (48)...
     state = await run(client)
@@ -411,3 +411,27 @@ async def test_unanswered_urgent_card_auto_approves_at_its_deadline(client, fake
     rec = state["recommendations"]["recent"][0]
     assert rec["decision_mode"] == "auto-deadline" and rec["status"] == "POSTED"
     assert fake_sim.posts and fake_sim.posts[0]["destination_station_id"] == "station-mirpur"
+
+
+async def test_deadline_never_lets_the_tank_run_dry(client, fake_sim, monkeypatch, manual_approval):
+    monkeypatch.setattr(get_settings(), "DEADLINE_TOLERANCE_TICKS", 100.0)  # loss alone would allow a long wait
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # 3 ticks of fuel, truck needs 2 (+1 safety)
+    await run(client)
+    fake_sim.world["instance"]["tick"] = 101
+    state = await run(client)
+    rec = state["recommendations"]["recent"][0]
+    assert rec["decision_mode"] == "auto-deadline" and rec["status"] == "POSTED"
+    assert "run dry" in rec["operator_note"]
+
+
+async def test_deadline_waits_while_the_tank_covers_wait_plus_transit(client, fake_sim, monkeypatch, manual_approval):
+    monkeypatch.setattr(get_settings(), "DEADLINE_TOLERANCE_TICKS", 100.0)
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800  # 8 ticks of fuel, truck needs 2 (+1 safety)
+    await run(client)
+    fake_sim.world["instance"]["tick"] = 101
+    state = await run(client)
+    (rec,) = state["recommendations"]["open"]
+    assert rec["status"] == "PENDING_APPROVAL" and fake_sim.posts == []
+    deadline = rec["deadline"]
+    assert deadline["limited_by"] == "never_dry" and 101 < deadline["tick"] <= 101 + 8 - 2 - 1
+    assert deadline["must_keep_liters"] <= 800
