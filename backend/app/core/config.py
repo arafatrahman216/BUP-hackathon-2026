@@ -131,6 +131,7 @@ class Settings(BaseSettings):
     REVIEW_STOCKOUT_PROB: float = 0.3  # stockout probability within the horizon at/above this -> operator
     REVIEW_EMPTY_MARGIN_TICKS: float = 4.0  # empties less than this many ticks after the fastest truck lands -> operator
     DEADLINE_TOLERANCE_TICKS: float = 1.0  # unanswered card auto-approves once waiting 1 more tick loses > this x tick demand
+    DEADLINE_SAFETY_TICKS: int = 1  # never-dry cap: approve while the tank still covers wait + transit + this many ticks
     DEADLINE_CONFIDENCE_SCALE: float = 3.0  # extra ticks of tolerance x (1 - forecast confidence)
     MIN_REVIEW_SECONDS: float = 10.0  # human reading time, kept only while waiting costs nothing  # below this a recommendation needs the operator
     ANOMALY_Z: float = 3.0  # single-tick z-score threshold (needs 2 ticks in a row)

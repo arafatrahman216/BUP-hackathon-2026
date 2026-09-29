@@ -343,7 +343,9 @@ class PipelineService:
 
     async def _deadline_approvals(self, world: World, forecasts: dict, open_recs: list) -> list:
         """Dynamic deadline: a card nobody answered is approved once waiting one more tick would lose
-        more than DEADLINE_TOLERANCE_TICKS x the station's demand per tick (simulator copy).
+        more than DEADLINE_TOLERANCE_TICKS x the station's demand per tick (simulator copy), and never later
+        than the last tick at which a truck still lands before the tank runs dry (never-dry cap:
+        inventory must cover (wait + transit + DEADLINE_SAFETY_TICKS) x demand per tick).
         Before sending it is re-checked against the current world and resized:
         over fair share -> the fair share; low confidence -> a bridge amount; no longer needed -> expired."""
         from app.pipeline.twin import Shipment, project
@@ -379,25 +381,36 @@ class PipelineService:
                        if h.get("station_id") == rec.station_id and h.get("fuel_type") == rec.fuel_type
                        and int(h.get("tick", -1)) >= rec.tick)
             remaining = max(0.0, tolerance - lost)
-            costs = []
+            # two limits on the wait d (ticks before the truck leaves):
+            #  cost: waiting d ticks loses more than the tolerance;
+            #  never dry: the tank must still hold (d + transit + DEADLINE_SAFETY_TICKS) x demand per tick,
+            #  i.e. a truck leaving after the wait lands before the station runs out.
+            costs, cost_wait, dry_wait = [], None, None
             for d in range(0, max(1, H - L)):
                 proj = project(world, demand, H, [Shipment(d, rec.route_id, rec.fuel_type, rec.quantity)])
-                costs.append(proj.stations[(rec.station_id, rec.fuel_type)].unmet)
+                st_proj = proj.stations[(rec.station_id, rec.fuel_type)]
+                costs.append(st_proj.unmet)
+                if st_proj.stockout_k is not None and st_proj.stockout_k <= d + L + s.DEADLINE_SAFETY_TICKS:
+                    dry_wait = d - 1  # -1: already too late to avoid running dry, approve now
                 if costs[-1] - costs[0] > remaining:
+                    cost_wait = d - 1
+                if cost_wait is not None or dry_wait is not None:
                     break
             ttl_left = max(0, s.APPROVAL_TTL_TICKS - (world.tick - rec.tick))
-            if costs[-1] - costs[0] > remaining:  # waiting stops being worth it inside the horizon
-                wait_ticks = min(len(costs) - 2, ttl_left)
-            else:  # waiting is cheap for the whole horizon: only the hard cap applies
-                wait_ticks = ttl_left
+            limits = [x for x in (cost_wait, dry_wait) if x is not None]
+            wait_ticks = max(0, min([ttl_left, *limits]))
+            never_dry_binds = dry_wait is not None and dry_wait <= wait_ticks
             created = rec.created_at if rec.created_at.tzinfo else rec.created_at.replace(tzinfo=timezone.utc)
             age = (datetime.now(timezone.utc) - created).total_seconds()
-            free = len(costs) > 1 and costs[1] - costs[0] <= 0
+            free = len(costs) > 1 and costs[1] - costs[0] <= 0 and not never_dry_binds
             tps = state.ticks_per_second
+            rate = max(f.rate_per_tick or 0.0, 0.0)
             state.deadlines[rec.id] = {"tick": world.tick + wait_ticks,
                                        "seconds": round(wait_ticks / tps, 1) if tps else None,
                                        "tolerance_liters": round(tolerance), "lost_while_waiting": round(lost),
-                                       "confidence": round(confidence, 2)}
+                                       "confidence": round(confidence, 2),
+                                       "limited_by": "never_dry" if never_dry_binds else ("loss" if cost_wait is not None else "ttl"),
+                                       "must_keep_liters": round((wait_ticks + L + s.DEADLINE_SAFETY_TICKS) * rate)}
             if wait_ticks > 0 or (free and age < s.MIN_REVIEW_SECONDS):
                 continue
             # deadline reached: re-check and resize against the current world
@@ -424,7 +437,9 @@ class PipelineService:
             await self.recs.update(rec, {
                 "status": RecommendationStatus.APPROVED, "quantity": qty, "decision_mode": "auto-deadline",
                 "operator_note": f"auto-approved at tick {world.tick}: no answer before the deadline "
-                                 f"(waiting longer would lose > {tolerance:,.0f} L)"}, commit=False)
+                                 + (f"(waiting longer would let the tank run dry before a {L}-tick truck lands)"
+                                    if never_dry_binds else f"(waiting longer would lose > {tolerance:,.0f} L)")},
+                commit=False)
             logger.info("Recommendation %s auto-approved at its deadline (tick %s, %s L)", rec.id, world.tick, qty)
             changed = True
         if changed:
