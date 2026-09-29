@@ -1,0 +1,52 @@
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.input {
+  width: 100%;
+  min-height: 36px;
+  max-height: 180px;
+  padding: 8px var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  resize: none;
+  field-sizing: content;
+  line-height: 1.45;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    box-shadow var(--duration-fast) var(--ease);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-focus);
+  background: var(--color-surface);
+}
+
+.hint {
+  grid-column: 1 / -1;
+  font-size: 0.6875rem;
+  color: var(--color-text-subtle);
+}
+
+.hint kbd {
+  padding: 0 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-subtle);
+  font-size: 0.625rem;
+}
+
+@media (max-width: 640px) {
+  .hint {
+    display: none;
+  }
+}

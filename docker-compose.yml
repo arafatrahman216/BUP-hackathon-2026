@@ -1,0 +1,32 @@
+# Dev setup: `docker compose up --build`
+#   Frontend: http://localhost:5173
+#   API:      http://localhost:8000      Docs: http://localhost:8000/docs
+# Source folders are mounted and both servers hot-reload, so edits apply live.
+# The database and file storage are Supabase (configured in backend/.env), so
+# there is no local database container.
+
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+    extra_hosts:
+      # lets the container reach services on your machine (e.g. a local OmniRoute)
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    env_file: ./frontend/.env
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped

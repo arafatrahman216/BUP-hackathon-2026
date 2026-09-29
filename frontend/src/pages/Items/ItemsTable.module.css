@@ -1,0 +1,56 @@
+.nameCell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 460px;
+  line-height: 1.35;
+}
+
+.name {
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.description,
+.noDescription {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.noDescription {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.price {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.muted {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.danger:hover:not(:disabled) {
+  color: var(--color-danger-text);
+  background: var(--color-danger-subtle);
+}
