@@ -8,7 +8,7 @@
  *   To add one: write a function here that calls `request()`, then use it from a hook.
  */
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001/api/v1').replace(
   /\/+$/,
   '',
 )
@@ -242,8 +242,18 @@ export const aiApi = {
   generate: (payload, options) => api.post('/ai/generate', payload, { timeout: AI_TIMEOUT_MS, ...options }),
 }
 
-// Add your feature endpoints below, e.g.:
-// export const ordersApi = {
-//   list: (params, options) => api.get('/orders', { ...options, params }),
-//   create: (data, options) => api.post('/orders', data, options),
-// }
+export const dashboardApi = {
+  /** Latest cached pipeline state (same payload as the `state` SSE event). */
+  get: (options) => api.get('/dashboard', options),
+  /** Run the pipeline now, even if the current tick was already processed. */
+  run: (options) => api.post('/pipeline/run', null, options),
+  /** URL of the backend's SSE stream (use with EventSource). */
+  streamUrl: () => buildUrl('/stream'),
+}
+
+export const recommendationsApi = {
+  list: (params, options) => api.get('/recommendations', { ...options, params }),
+  /** @param {{quantity?: number, note?: string}} body  quantity = operator edit */
+  approve: (id, body = {}, options) => api.post(`/recommendations/${id}/approve`, body, options),
+  reject: (id, body = {}, options) => api.post(`/recommendations/${id}/reject`, body, options),
+}

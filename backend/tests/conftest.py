@@ -13,6 +13,10 @@ os.environ.update({
     "RATE_LIMIT_WINDOW_SECONDS": "60",
     "AI_PROVIDER_ORDER": "gemini,groq",
     "AI_FALLBACK_ENABLED": "true",
+    "PIPELINE_ENABLED": "false",
+    "SIMULATOR_RETRIES": "0",
+    "SIMULATOR_BACKOFF_SECONDS": "0",
+    "SIMULATOR_BREAKER_THRESHOLD": "100",
 })
 
 import httpx  # noqa: E402
@@ -24,6 +28,9 @@ from app.ai.providers.base import BaseLLMProvider  # noqa: E402
 from app.core.database import engine  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models import Base  # noqa: E402
+from app.pipeline.state import reset_pipeline_state  # noqa: E402
+from app.repositories.simulator_repository import get_simulator_repository  # noqa: E402
+from tests.fake_simulator import FakeSimulator  # noqa: E402
 
 
 class FakeProvider(BaseLLMProvider):
@@ -66,13 +73,21 @@ def fake_llm() -> LLMClient:
 
 
 @pytest.fixture
-async def app(fake_llm):
+def fake_sim() -> FakeSimulator:
+    return FakeSimulator()
+
+
+@pytest.fixture
+async def app(fake_llm, fake_sim):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
     app = create_app()  # fresh app -> fresh rate-limiter state
     app.dependency_overrides[get_llm_client] = lambda: fake_llm
+    sim_repo = fake_sim.repository()
+    app.dependency_overrides[get_simulator_repository] = lambda: sim_repo
+    reset_pipeline_state()  # fresh cache + lock bound to this test's event loop
     return app
 
 

@@ -9,7 +9,16 @@
   --color-accent-hover: #4338ca;
   --color-success: #15803d;
   --color-danger: #dc2626;
+  --color-track: #eceef2;
 
+  /* Status (reserved for state; always paired with an icon + label) */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-muted: #898781;
+
+  --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
@@ -19,6 +28,7 @@
   --radius: 8px;
   --radius-lg: 12px;
 
+  --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-md: 1rem;
 
@@ -39,6 +49,7 @@
     --color-accent-hover: #6366f1;
     --color-success: #4ade80;
     --color-danger: #f87171;
+    --color-track: #242833;
   }
 }
 

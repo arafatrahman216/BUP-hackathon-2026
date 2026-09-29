@@ -4,7 +4,7 @@
 @features.md
 
 ## Rules
-- Follow the structure and conventions in design.md (new features: §3.6). The project is backend-only; don't build a frontend.
+- Follow the structure and conventions in design.md (new features: §3.6). The operator dashboard lives in `frontend/` (design.md §8); the browser only talks to the backend.
 - Build what features.md lists as `todo`. Mark features `done` and fill in their Notes when finished.
 - **Record every new design decision** (library, pattern, data model, UI convention) in design.md's decision log, and update the folder tables if you add folders.
 - New env vars: declare them in `backend/app/core/config.py` and document them in `backend/.env.example`.

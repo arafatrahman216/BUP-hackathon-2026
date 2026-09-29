@@ -6,10 +6,11 @@ export function AppLayout() {
     <div className={styles.shell}>
       <header className={styles.header}>
         <Link to="/" className={styles.brand}>
-          Hackathon App
+          BUP Fuel Operations
         </Link>
         <nav className={styles.nav}>
-          <Link to="/">Home</Link>
+          <Link to="/">Dashboard</Link>
+          <Link to="/status">Backend status</Link>
         </nav>
       </header>
       <main className={styles.main}>

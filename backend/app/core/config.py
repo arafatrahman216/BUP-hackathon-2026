@@ -79,6 +79,28 @@ class Settings(BaseSettings):
     OMNIROUTE_MODEL: str = ""
     OMNIROUTE_BASE_URL: str = "http://localhost:20128/v1"
 
+    # --- Simulator client ---
+    SIMULATOR_BASE_URL: str = "http://localhost:8000"
+    SIMULATOR_TIMEOUT_SECONDS: float = 5.0
+    SIMULATOR_RETRIES: int = 2  # extra attempts on network errors / 5xx
+    SIMULATOR_BACKOFF_SECONDS: float = 0.2  # doubles each retry
+    SIMULATOR_BREAKER_THRESHOLD: int = 5  # consecutive failures that open the circuit
+    SIMULATOR_BREAKER_COOLDOWN_SECONDS: float = 5.0
+
+    # --- Pipeline (tick loop) ---
+    PIPELINE_ENABLED: bool = True  # false -> no background tick watcher (tests)
+    PIPELINE_POLL_SECONDS: float = 1.0  # /v1/instance polling fallback when SSE is down
+    PIPELINE_SSE_ENABLED: bool = True
+    FORECAST_WINDOW_TICKS: int = 8  # moving-average window for the demand rate
+    SAFETY_TICKS: int = 8  # reorder when cover < transit + SAFETY_TICKS  ("watch")
+    URGENT_MARGIN_TICKS: int = 2  # cover < transit + URGENT_MARGIN_TICKS -> "urgent"
+    MIN_SHIPMENT_LITERS: float = 500.0
+    DEPOT_RESERVE_LITERS: float = 0.0  # never plan below this depot level
+    AUTO_POST_ENABLED: bool = True  # false -> every recommendation needs the operator
+    APPROVAL_TTL_TICKS: int = 48  # unanswered recommendations expire after this many ticks...
+    APPROVAL_MIN_SECONDS: float = 60.0  # ...and at least this many wall-clock seconds
+    SNAPSHOT_EVERY_TICKS: int = 1  # save a world snapshot every N processed ticks
+
     @property
     def supabase_project_ref(self) -> str:
         host = self.SUPABASE_URL.split("//", 1)[-1]

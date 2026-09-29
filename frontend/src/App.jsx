@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router-dom'
 import { AppLayout } from './components/layout'
+import DashboardPage from './pages/Dashboard/DashboardPage'
 import HomePage from './pages/Home/HomePage'
 import NotFoundPage from './pages/NotFound/NotFoundPage'
 
@@ -9,7 +10,8 @@ export default function App() {
   return (
     <Routes>
       <Route element={<AppLayout />}>
-        <Route index element={<HomePage />} />
+        <Route index element={<DashboardPage />} />
+        <Route path="status" element={<HomePage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

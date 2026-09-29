@@ -1,5 +1,7 @@
 """Import every model here so Base.metadata knows about it (needed for create_all)."""
 
 from app.models.base import Base, TimestampMixin
+from app.models.recommendation import Recommendation, RecommendationStatus
+from app.models.snapshot import TickSnapshot
 
-__all__ = ["Base", "TimestampMixin"]
+__all__ = ["Base", "Recommendation", "RecommendationStatus", "TickSnapshot", "TimestampMixin"]
