@@ -3,6 +3,7 @@ import { recommendationsApi } from '../../api/api'
 import { hours, liters, RISK, shortId } from '../../utils/format'
 import { Button } from '../ui'
 import styles from './Dashboard.module.css'
+import { AskPanel } from './AskPanel'
 import { StatusBadge } from './StatusBadge'
 
 /** A recommendation waiting for the operator: approve (optionally with an edited quantity) or reject. */
@@ -11,6 +12,7 @@ export function ApprovalCard({ rec, tickMinutes, maxQuantity, onDone }) {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState(null)
+  const [asking, setAsking] = useState(false)
 
   const act = async (kind) => {
     setBusy(kind)
@@ -66,9 +68,11 @@ export function ApprovalCard({ rec, tickMinutes, maxQuantity, onDone }) {
           {Number(quantity) !== rec.quantity ? 'Approve edited' : 'Approve'}
         </Button>
         <Button loading={busy === 'reject'} disabled={!!busy} onClick={() => act('reject')}>Reject</Button>
+        <Button aria-expanded={asking} onClick={() => setAsking((v) => !v)}>{asking ? 'Hide AI' : 'Ask AI'}</Button>
       </div>
       {maxQuantity && <p className={styles.muted}>Route max {liters(maxQuantity)}</p>}
       {error && <p className={styles.error} role="alert">{error}</p>}
+      {asking && <AskPanel rec={rec} />}
     </article>
   )
 }

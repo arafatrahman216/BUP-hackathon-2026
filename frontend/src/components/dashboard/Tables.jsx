@@ -1,4 +1,6 @@
+import { Fragment, useState } from 'react'
 import { liters, LEVEL, RISK, shortId, STAGE } from '../../utils/format'
+import { AskPanel } from './AskPanel'
 import styles from './Dashboard.module.css'
 import { StatusBadge } from './StatusBadge'
 
@@ -111,29 +113,42 @@ const REC = {
 }
 
 export function DecisionLog({ recs }) {
+  const [askingId, setAskingId] = useState(null)
   if (!recs.length) return <Empty>No recommendations yet.</Empty>
   return (
     <div className={styles.tableWrap}>
       <table className={styles.table}>
         <thead>
-          <tr><th>#</th><th>Tick</th><th>Status</th><th>Mode</th><th>Station</th><th>Fuel</th><th className={styles.num}>Qty</th><th>Route</th><th>Result</th></tr>
+          <tr><th>#</th><th>Tick</th><th>Status</th><th>Mode</th><th>Station</th><th>Fuel</th><th className={styles.num}>Qty</th><th>Route</th><th>Result</th><th>AI</th></tr>
         </thead>
         <tbody>
           {recs.map((r) => (
-            <tr key={r.id} title={r.explanation}>
-              <td>{r.id}</td>
-              <td>{r.tick}</td>
-              <td><StatusBadge meta={REC[r.status] ?? STAGE.pending} label={r.status} /></td>
-              <td>{r.decision_mode}</td>
-              <td>{shortId(r.station_id)}</td>
-              <td>{r.fuel_type}</td>
-              <td className={styles.num}>
-                {liters(r.quantity)}
-                {r.quantity !== r.proposed_quantity && <span className={styles.muted}> (was {liters(r.proposed_quantity)})</span>}
-              </td>
-              <td>{shortId(r.route_id)}</td>
-              <td>{r.allocation_id ? `allocation ${r.allocation_id}` : r.error_code || r.error_message || r.operator_note || '–'}</td>
-            </tr>
+            <Fragment key={r.id}>
+              <tr title={r.explanation}>
+                <td>{r.id}</td>
+                <td>{r.tick}</td>
+                <td><StatusBadge meta={REC[r.status] ?? STAGE.pending} label={r.status} /></td>
+                <td>{r.decision_mode}</td>
+                <td>{shortId(r.station_id)}</td>
+                <td>{r.fuel_type}</td>
+                <td className={styles.num}>
+                  {liters(r.quantity)}
+                  {r.quantity !== r.proposed_quantity && <span className={styles.muted}> (was {liters(r.proposed_quantity)})</span>}
+                </td>
+                <td>{shortId(r.route_id)}</td>
+                <td>{r.allocation_id ? `allocation ${r.allocation_id}` : r.error_code || r.error_message || r.operator_note || '–'}</td>
+                <td>
+                  <button type="button" className={styles.linkButton} aria-expanded={askingId === r.id}
+                          aria-label={`Ask AI about recommendation ${r.id}`}
+                          onClick={() => setAskingId(askingId === r.id ? null : r.id)}>
+                    {askingId === r.id ? 'Hide' : 'Ask AI'}
+                  </button>
+                </td>
+              </tr>
+              {askingId === r.id && (
+                <tr className={styles.askRow}><td colSpan={10}><AskPanel rec={r} /></td></tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

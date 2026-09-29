@@ -88,15 +88,88 @@ export function SidePanel({ entity, kind, rec, onClose, onOpenRec }) {
   )
 }
 
-const QUESTIONS = ['Why not Patiya?', 'Wait an hour?', 'If the road closes?']
 const STEP_L = 500
 
+/**
+ * Ask AI about one action (queue item or log entry): "Ask why", the suggested questions for its
+ * status, a free-text question, and the answers asked before. `onAsk(item, q, kind)` and
+ * `onQuestions(item, kind)` come from useConsole (live: the backend explain API).
+ */
+function AskAI({ item, kind, onAsk, onQuestions }) {
+  const [suggestions, setSuggestions] = useState([])
+  const [history, setHistory] = useState([])
+  const [answer, setAnswer] = useState(null) // {q, loading, text, badge, context}
+  const [text, setText] = useState('')
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true // StrictMode mounts twice: set it again after the first cleanup
+    return () => { alive.current = false }
+  }, [])
+  useEffect(() => {
+    if (!onQuestions) return
+    onQuestions(item, kind).then((res) => {
+      if (!alive.current) return
+      setSuggestions(res.suggestions)
+      setHistory(res.history)
+    })
+  }, [item.id, kind]) // eslint-disable-line react-hooks/exhaustive-deps -- reload per action, not per render
+
+  const ask = async (q) => {
+    if (!q.trim() || answer?.loading) return
+    if (answer && !answer.loading && answer.context) setHistory((h) => [answer, ...h])
+    setAnswer({ q, loading: true })
+    const res = await onAsk(item, q, kind)
+    if (alive.current) setAnswer((a) => (a?.q === q ? { ...res, q, loading: false } : a))
+  }
+
+  return (
+    <div className={styles.section}>
+      <div className={styles.askRow}>
+        <button type="button" className={styles.askBtn} disabled={answer?.loading} onClick={() => ask('why')}>Ask why</button>
+        {suggestions.map((q) => (
+          <button key={q} type="button" className={styles.qBtn} aria-pressed={answer?.q === q} disabled={answer?.loading}
+                  onClick={() => ask(q)}>{q}</button>
+        ))}
+      </div>
+      <form className={styles.askForm} onSubmit={(e) => { e.preventDefault(); ask(text); setText('') }}>
+        <input className={styles.askInput} type="text" value={text} maxLength={2000} aria-label="Ask your own question"
+               placeholder="Ask your own question about this action…" onChange={(e) => setText(e.target.value)} />
+        <button type="submit" className={styles.qBtn} disabled={!text.trim() || answer?.loading}>Ask</button>
+      </form>
+      {answer && (
+        <div className={styles.answer} aria-live="polite">
+          {!answer.loading && <span className={styles.badge}>{answer.badge}</span>}
+          {answer.q !== 'why' && <span className={styles.answerQ}>{answer.q}</span>}
+          <p className={styles.answerText}>{answer.loading ? 'Reading engine data…' : answer.text}</p>
+          {!answer.loading && answer.context && (
+            <details className={styles.answerData}>
+              <summary>Data the AI used</summary>
+              <pre>{JSON.stringify(answer.context, null, 2)}</pre>
+            </details>
+          )}
+        </div>
+      )}
+      {history.length > 0 && (
+        <details className={styles.answerData}>
+          <summary>Earlier questions ({history.length})</summary>
+          {history.map((h, i) => (
+            <div key={`${h.q}-${i}`} className={styles.answerOld}>
+              <span className={styles.answerQ}>{h.q}</span>
+              <p className={styles.answerText}>{h.text}</p>
+              <span className={styles.badge}>{h.badge}{h.at != null ? ` · asked at tick ${h.at}` : ''}</span>
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  )
+}
+
 /** Recommendation detail: deadline, shipment, station state, impact, Ask why, approve / edit / reject. */
-export function RecommendationModal({ rec, simDown, onClose, onAsk, onApprove, onReject }) {
+export function RecommendationModal({ rec, simDown, onClose, onAsk, onQuestions, onApprove, onReject }) {
   const ref = useOverlay(onClose)
   const [editing, setEditing] = useState(false)
   const [qty, setQty] = useState(rec.qty)
-  const [answer, setAnswer] = useState(null) // {q, loading, text, badge}
   const [busy, setBusy] = useState(false)
   const alive = useRef(true)
   useEffect(() => {
@@ -107,11 +180,6 @@ export function RecommendationModal({ rec, simDown, onClose, onAsk, onApprove, o
   const risk = RISK[rec.sev] ?? RISK.safe
   const sendQty = editing ? qty : rec.qty
 
-  const ask = async (q) => {
-    setAnswer({ q, loading: true })
-    const res = await onAsk(rec, q)
-    if (alive.current) setAnswer((a) => (a?.q === q ? { q, loading: false, ...res } : a))
-  }
   const act = async (fn) => {
     setBusy(true)
     try {
@@ -171,20 +239,7 @@ export function RecommendationModal({ rec, simDown, onClose, onAsk, onApprove, o
           </div>
         </div>
 
-        <div className={styles.section}>
-          <div className={styles.askRow}>
-            <button type="button" className={styles.askBtn} onClick={() => ask('why')}>Ask why</button>
-            {QUESTIONS.map((q) => (
-              <button key={q} type="button" className={styles.qBtn} aria-pressed={answer?.q === q} onClick={() => ask(q)}>{q}</button>
-            ))}
-          </div>
-          {answer && (
-            <div className={styles.answer} aria-live="polite">
-              {!answer.loading && <span className={styles.badge}>{answer.badge}</span>}
-              <p className={styles.answerText}>{answer.loading ? 'Reading engine data…' : answer.text}</p>
-            </div>
-          )}
-        </div>
+        <AskAI item={rec} kind="rec" onAsk={onAsk} onQuestions={onQuestions} />
 
         <div className={styles.footer}>
           {editing && (
@@ -210,7 +265,7 @@ export function RecommendationModal({ rec, simDown, onClose, onAsk, onApprove, o
 const STEPS = ['Action taken', 'Departed', 'Arrived', 'Verified']
 
 /** Action log detail: lifecycle, summary, state when decided, prediction check. */
-export function LogModal({ entry, badge, aiDown, onClose }) {
+export function LogModal({ entry, badge, aiDown, onClose, onAsk, onQuestions }) {
   const ref = useOverlay(onClose)
   const progress = `${(Math.max(0, entry.done - 1) / 3) * 75}%`
   return (
@@ -251,6 +306,8 @@ export function LogModal({ entry, badge, aiDown, onClose }) {
           <span className={styles.muted}>{entry.check}</span>
           <span className={styles.verdict}><span className={styles.dot} style={cv(entry.vc)} />{entry.verdict}</span>
         </div>
+
+        {onAsk && <AskAI item={entry} kind="log" onAsk={onAsk} onQuestions={onQuestions} />}
       </div>
     </div>
   )

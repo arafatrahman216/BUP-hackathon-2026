@@ -1,7 +1,10 @@
+import re
+
 import pytest
 from app.core.config import get_settings
 
-from app.pipeline.decide import RulePlanner
+from app.core.config import get_settings
+from app.pipeline.decide import RulePlanner, recheck
 from app.pipeline.predict import MovingAveragePredictor
 from app.pipeline.state import get_pipeline_state
 from app.pipeline.types import World
@@ -40,11 +43,12 @@ async def test_quiet_world_posts_nothing(client, fake_sim):
 async def test_watch_risk_is_auto_posted(client, fake_sim):
     fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800  # cover 8 ticks -> watch
     state = await run(client)
-    assert fake_sim.posts == [{
-        "idempotency_key": "bup-rec-1-station-tongi-diesel-6500", "source_depot_id": "depot-gazipur",
-        "destination_station_id": "station-tongi", "route_id": "route-gazipur-tongi", "fuel_type": "DIESEL",
-        "quantity": 6500.0,
-    }]
+    (post,) = fake_sim.posts
+    assert re.fullmatch(r"bup-[0-9a-f]{12}-station-tongi-diesel-6500", post.pop("idempotency_key"))
+    assert post == {
+        "source_depot_id": "depot-gazipur", "destination_station_id": "station-tongi",
+        "route_id": "route-gazipur-tongi", "fuel_type": "DIESEL", "quantity": 6500.0,
+    }
     rec = state["recommendations"]["recent"][0]
     assert rec["status"] == "POSTED" and rec["decision_mode"] == "auto" and rec["allocation_id"] == 1
     assert "Tongi DIESEL holds 800" in rec["explanation"]
@@ -105,9 +109,21 @@ async def test_active_crisis_makes_it_important(client, fake_sim):
 
 async def test_simulator_refusal_is_recorded(client, fake_sim):
     fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800
-    fake_sim.refuse = "DISPATCH_CAPACITY_EXCEEDED"
+    fake_sim.refuse = "INSUFFICIENT_INVENTORY"
     rec = (await run(client))["recommendations"]["recent"][0]
-    assert rec["status"] == "REFUSED" and rec["error_code"] == "DISPATCH_CAPACITY_EXCEEDED"
+    assert rec["status"] == "REFUSED" and rec["error_code"] == "INSUFFICIENT_INVENTORY"
+
+
+async def test_dispatch_limit_refusal_waits_for_next_tick(client, fake_sim):
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800
+    fake_sim.refuse = "DISPATCH_CAPACITY_EXCEEDED"
+    rec = (await run(client))["recommendations"]["open"][0]
+    assert rec["status"] == "APPROVED" and rec["error_code"] == "DISPATCH_CAPACITY_EXCEEDED"
+
+    fake_sim.refuse = None
+    fake_sim.world["instance"]["tick"] = 101
+    rec = (await run(client))["recommendations"]["recent"][0]
+    assert rec["status"] == "POSTED" and len(fake_sim.posts) == 1
 
 
 async def test_simulator_down_keeps_cached_state(client, fake_sim):
@@ -127,13 +143,120 @@ async def test_simulator_down_keeps_cached_state(client, fake_sim):
     assert len(fake_sim.posts) == 1
 
 
-async def test_stale_data_is_not_acted_on(client, fake_sim):
+async def test_stale_data_acts_cautiously(client, fake_sim):
     fake_sim.stale = True
-    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800  # watch: left alone on stale data
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300  # urgent: planned, halved
     state = await run(client)
-    assert state["pipeline"]["acting"] is False
-    assert stage_status(state)["validate"] == "fallback" and stage_status(state)["decide"] == "skipped"
-    assert fake_sim.posts == []
+    assert state["pipeline"]["acting"] is True and state["pipeline"]["cautious"] is True
+    assert stage_status(state)["validate"] == "fallback" and stage_status(state)["decide"] == "ok"
+    (rec,) = state["recommendations"]["open"]
+    assert (rec["station_id"], rec["fuel_type"], rec["quantity"]) == ("station-mirpur", "PETROL", 3500)
+    assert rec["status"] == "PENDING_APPROVAL" and any("stale" in r for r in rec["reasons"])
+
+    # the operator approves without editing: stale data may shrink the shipment, never grow it
+    approved = (await client.post(f"/api/v1/recommendations/{rec['id']}/approve", json={})).json()
+    assert approved["status"] == "POSTED" and fake_sim.posts[0]["quantity"] == 3500
+
+
+async def test_stale_data_mode_stop(client, fake_sim, monkeypatch):
+    monkeypatch.setattr(get_settings(), "STALE_DATA_MODE", "stop")
+    fake_sim.stale = True
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
+    state = await run(client)
+    assert state["pipeline"]["acting"] is False and state["pipeline"]["cautious"] is False
+    assert stage_status(state)["decide"] == "skipped" and state["recommendations"]["open"] == []
+
+
+async def test_stale_data_skips_station_we_just_shipped_to(client, fake_sim):
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800
+    await run(client)
+    assert len(fake_sim.posts) == 1
+
+    # stale data that doesn't show our shipment yet, and the tank looks almost empty
+    fake_sim.stale = True
+    fake_sim.world["allocations"] = []
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 300
+    fake_sim.world["instance"]["tick"] = 101
+    state = await run(client)
+    assert state["recommendations"]["open"] == [] and len(fake_sim.posts) == 1
+
+
+async def test_approval_is_refitted_to_the_current_world(client, fake_sim):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
+    rec = (await run(client))["recommendations"]["open"][0]
+    assert rec["quantity"] == 7000
+
+    # while the operator reads it, the depot runs low
+    fake_sim.world["depots"][0]["inventory"]["PETROL"] = 3050
+    fake_sim.world["instance"]["tick"] = 101
+    await run(client)
+    approved = (await client.post(f"/api/v1/recommendations/{rec['id']}/approve", json={})).json()
+    assert approved["status"] == "POSTED" and approved["quantity"] == 3000 and approved["proposed_quantity"] == 7000
+    assert fake_sim.posts[0]["quantity"] == 3000 and fake_sim.posts[0]["idempotency_key"].endswith("-3000")
+    assert "Resized from 7,000 to 3,000 L at tick 101" in approved["explanation"]
+
+
+async def test_approval_of_a_plan_whose_route_was_cut_is_refused_locally(client, fake_sim):
+    fake_sim.station("station-mirpur")["inventory"]["PETROL"] = 300
+    rec = (await run(client))["recommendations"]["open"][0]
+    fake_sim.route("route-gazipur-mirpur")["status"] = "DISRUPTED"
+    fake_sim.world["instance"]["tick"] = 101
+    await run(client)
+    refused = (await client.post(f"/api/v1/recommendations/{rec['id']}/approve", json={})).json()
+    assert refused["status"] == "REFUSED" and refused["error_code"] == "ROUTE_DISRUPTED"
+    assert fake_sim.posts == []  # never sent
+
+
+async def test_lost_post_answer_is_reconciled_by_key(client, fake_sim):
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 800
+    fake_sim.lose_answer = True  # the allocation is created, but we only see a 503
+    rec = (await run(client))["recommendations"]["open"][0]
+    assert rec["status"] == "APPROVED" and rec["error_code"] == "FAULT_INJECTED"
+
+    # next tick the tank looks different, but the earlier attempt is found by its key: no second shipment
+    fake_sim.lose_answer = False
+    fake_sim.station("station-tongi")["inventory"]["DIESEL"] = 500
+    fake_sim.world["instance"]["tick"] = 101
+    rec = (await run(client))["recommendations"]["recent"][0]
+    assert rec["status"] == "POSTED" and rec["allocation_id"] == 1 and len(fake_sim.posts) == 1
+
+
+def test_idempotency_keys_do_not_depend_on_database_ids():
+    from app.services.recommendation_service import idempotency_key, new_idempotency_key
+
+    a, b = new_idempotency_key("station-x", "DIESEL", 5000), new_idempotency_key("station-x", "DIESEL", 5000)
+    assert a != b  # a fresh database (ids from 1 again) can't collide with keys the simulator already holds
+
+    class Rec:
+        idempotency_key, station_id, fuel_type = a, "station-x", "DIESEL"
+
+    assert idempotency_key(Rec, 5000) == a  # retry: same key
+    assert idempotency_key(Rec, 3000) == a.removesuffix("-5000") + "-3000"  # new quantity: new key
+
+
+def test_recheck_limits():
+    sim = FakeSimulator()
+    sim.station("station-mirpur")["inventory"]["DIESEL"] = 12000  # 3,000 L free
+    w = sim.world
+    world = World(instance=w["instance"], depots={d["id"]: d for d in w["depots"]},
+                  stations={s["id"]: s for s in w["stations"]}, routes={r["id"]: r for r in w["routes"]},
+                  supply=[], events=[], allocations=[], history=[], metrics={})
+    args = dict(station_id="station-mirpur", fuel_type="DIESEL", depot_id="depot-gazipur",
+                route_id="route-gazipur-mirpur", min_shipment=500, depot_reserve=0)
+    assert recheck(world, quantity=7000, can_grow=True, **args).quantity == 3000
+    assert recheck(world, quantity=1000, can_grow=True, **args).quantity == 3000  # auto plans grow to fit
+    assert recheck(world, quantity=1000, can_grow=False, **args).quantity == 1000  # operator's number is a cap
+    assert recheck(world, quantity=300, can_grow=False, **args).quantity == 300  # operator may go below the minimum
+
+    sim.station("station-mirpur")["inventory"]["DIESEL"] = 14800
+    full = recheck(world, quantity=7000, can_grow=True, **args)
+    assert full.code == "DESTINATION_CAPACITY_EXCEEDED" and not full.retry
+    sim.station("station-mirpur")["inventory"]["DIESEL"] = 1000
+    world.allocations = [{"source_depot_id": "depot-gazipur", "destination_station_id": "station-tongi",
+                          "fuel_type": "PETROL", "quantity": 12000, "status": "PENDING", "created_tick": 100}]
+    busy = recheck(world, quantity=7000, can_grow=True, **args)
+    assert busy.code == "DISPATCH_CAPACITY_EXCEEDED" and busy.retry
 
 
 async def test_predict_failure_falls_back_to_last_rates(app, client, fake_sim, monkeypatch):

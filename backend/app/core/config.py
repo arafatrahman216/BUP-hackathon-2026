@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REQUESTS: int = 20
     RATE_LIMIT_WINDOW_SECONDS: int = 60
-    RATE_LIMIT_PATH_PREFIXES: str = "/api/v1/ai"
+    RATE_LIMIT_PATH_PREFIXES: str = "/api/v1/ai,/api/v1/explain"
 
     # --- AI ---
     # Comma-separated chain, tried left to right. Entries may repeat (acts as a retry)
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     AI_DEFAULT_MAX_TOKENS: int | None = None  # None -> provider default
 
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
 
     GROQ_API_KEY: str = ""
@@ -102,6 +102,17 @@ class Settings(BaseSettings):
     APPROVAL_TTL_TICKS: int = 48  # unanswered recommendations expire after this many ticks...
     APPROVAL_MIN_SECONDS: float = 60.0  # ...and at least this many wall-clock seconds
     SNAPSHOT_EVERY_TICKS: int = 1  # save a world snapshot every N processed ticks
+    # X-Simulator-Stale: "cautious" -> plan urgent needs only, with smaller shipments; "stop" -> don't act
+    STALE_DATA_MODE: Literal["cautious", "stop"] = "cautious"
+    STALE_QUANTITY_FACTOR: float = 0.5  # cautious mode: shipments are scaled by this
+
+    # --- Explainability (LLM answers grounded in simulator data) ---
+    EXPLAIN_PROVIDER: str = ""  # "" -> the AI_PROVIDER_ORDER chain (Gemini first); "gemini" -> Gemini only
+    EXPLAIN_MODEL: str = ""  # model override; needs EXPLAIN_PROVIDER
+    EXPLAIN_TEMPERATURE: float = 0.2
+    EXPLAIN_MAX_TOKENS: int | None = None
+    EXPLAIN_PROFILES_PATH: str = ""  # "" -> app/explainability/profiles.json
+    EXPLAIN_HISTORY_LIMIT: int = 500  # demand-history rows read per question (max 2000)
 
     DEMO_MASK_ERRORS: bool = True  # never show errors on the dashboard: backup data + "ERROR MASKED" log line
 

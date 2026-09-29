@@ -53,6 +53,43 @@ describe('DashboardPage', () => {
     })
   })
 
+  it('asks the AI about a pending recommendation', async () => {
+    vi.stubGlobal('EventSource', undefined)
+    const qa = {
+      id: 1, recommendation_id: 7, tick: 100, question: 'Why does this need my approval?', answer: 'Mirpur runs dry in 2.7 ticks.',
+      profile: 'recommendation', provider: 'gemini', model: 'gemini-3.8-flash', context: { forecast: {} }, errors: [],
+      created_at: '2026-09-29T10:00:00',
+    }
+    const fetchMock = vi.fn((url, init) => {
+      if (String(url).includes('/explain/recommendations/7')) {
+        return Promise.resolve(init?.method === 'POST' ? jsonResponse(qa)
+          : jsonResponse({ recommendation_id: 7, status: 'PENDING_APPROVAL', suggestions: ['Why does this need my approval?'], items: [] }))
+      }
+      return Promise.resolve(jsonResponse(state))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithProviders(<DashboardPage />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Ask AI' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Why does this need my approval?' }))
+
+    expect(await screen.findByText('Mirpur runs dry in 2.7 ticks.')).toBeInTheDocument()
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(JSON.parse(post[1].body)).toEqual({ question: 'Why does this need my approval?' })
+    expect(screen.getByText('Data the AI used')).toBeInTheDocument()
+  })
+
+  it('opens the AI panel from the decision log', async () => {
+    vi.stubGlobal('EventSource', undefined)
+    vi.stubGlobal('fetch', vi.fn((url) => Promise.resolve(String(url).includes('/explain/')
+      ? jsonResponse({ recommendation_id: 7, status: 'PENDING_APPROVAL', suggestions: ['Why was this recommended?'], items: [] })
+      : jsonResponse(state))))
+    renderWithProviders(<DashboardPage />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Ask AI about recommendation 7' }))
+    expect(await screen.findByRole('region', { name: 'Ask AI about recommendation 7' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Why was this recommended?' })).toBeInTheDocument()
+  })
+
   it('shows a stale banner when the simulator is unreachable', async () => {
     vi.stubGlobal('EventSource', undefined)
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(jsonResponse({
