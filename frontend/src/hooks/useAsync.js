@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * Run an async function and track {data, error, loading}.
  *
  *   const { data, loading, error, refetch } = useAsync(
- *     ({ signal }) => itemsApi.list({ page }, { signal }),
- *     [page],
+ *     ({ signal }) => healthApi.check({ signal }),
+ *     [],
  *   )
  *
  * - Re-runs whenever `deps` change (like useEffect).

@@ -1,5 +1,5 @@
 """Supabase Storage access over its REST API (no SDK). Storage is a data source,
-so it lives with the repositories; FileService holds the business rules."""
+so it lives with the repositories. Inject it with the `Storage` dependency."""
 
 from typing import Any
 

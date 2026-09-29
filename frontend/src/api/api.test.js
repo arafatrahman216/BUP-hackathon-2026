@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { jsonResponse } from '../test/utils'
-import { API_BASE_URL, ApiError, AUTH_UNAUTHORIZED_EVENT, clearToken, filesApi, getToken, itemsApi, request, setToken } from './api'
+import { aiApi, API_BASE_URL, ApiError, AUTH_UNAUTHORIZED_EVENT, clearToken, getToken, request, setToken } from './api'
 
 describe('api.js', () => {
   let fetchMock
@@ -18,36 +18,37 @@ describe('api.js', () => {
   }
 
   it('builds URLs from VITE_API_BASE_URL and skips empty params', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ items: [], total: 0, page: 1, page_size: 20, pages: 0 }))
-    await itemsApi.list({ page: 2, page_size: 20, search: '', is_active: null })
+    fetchMock.mockResolvedValue(jsonResponse([]))
+    await request('/things', { params: { page: 2, page_size: 20, search: '', is_active: null } })
 
     expect(API_BASE_URL).toBe('http://api.test/api/v1')
     const { url, init } = lastCall()
-    expect(url.origin + url.pathname).toBe('http://api.test/api/v1/items')
+    expect(url.origin + url.pathname).toBe('http://api.test/api/v1/things')
     expect(Object.fromEntries(url.searchParams)).toEqual({ page: '2', page_size: '20' })
     expect(init.method).toBe('GET')
   })
 
   it('JSON-encodes plain object bodies', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ id: 1, name: 'A' }, { status: 201 }))
-    const item = await itemsApi.create({ name: 'A', price: 2 })
+    fetchMock.mockResolvedValue(jsonResponse({ text: 'hi', provider: 'groq' }))
+    const reply = await aiApi.generate({ prompt: 'hello' })
 
-    const { init } = lastCall()
+    const { url, init } = lastCall()
+    expect(url.pathname).toBe('/api/v1/ai/generate')
     expect(init.method).toBe('POST')
     expect(init.headers['Content-Type']).toBe('application/json')
-    expect(init.body).toBe(JSON.stringify({ name: 'A', price: 2 }))
-    expect(item).toEqual({ id: 1, name: 'A' })
+    expect(init.body).toBe(JSON.stringify({ prompt: 'hello' }))
+    expect(reply).toEqual({ text: 'hi', provider: 'groq' })
   })
 
   it('sends FormData untouched (no JSON, no Content-Type so the browser sets the boundary)', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ path: 'docs/a.txt' }, { status: 201 }))
-    const file = new File(['hello'], 'a.txt', { type: 'text/plain' })
-    await filesApi.upload(file, { folder: 'docs' })
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }, { status: 201 }))
+    const form = new FormData()
+    form.append('file', new File(['hello'], 'a.txt', { type: 'text/plain' }))
+    await request('/uploads', { method: 'POST', body: form })
 
     const { init } = lastCall()
     expect(init.body).toBeInstanceOf(FormData)
     expect(init.body.get('file')).toBeInstanceOf(File)
-    expect(init.body.get('folder')).toBe('docs')
     expect(init.headers['Content-Type']).toBeUndefined()
   })
 
@@ -68,9 +69,8 @@ describe('api.js', () => {
 
   it('returns null for 204 No Content', async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
-    await expect(itemsApi.remove(5)).resolves.toBeNull()
+    await expect(request('/things/5', { method: 'DELETE' })).resolves.toBeNull()
     expect(lastCall().init.method).toBe('DELETE')
-    expect(lastCall().url.pathname).toBe('/api/v1/items/5')
   })
 
   it('parses the backend error shape into ApiError, with per-field errors', async () => {
@@ -92,7 +92,7 @@ describe('api.js', () => {
       ),
     )
 
-    const error = await itemsApi.create({ name: '' }).catch((e) => e)
+    const error = await request('/things', { method: 'POST', body: { name: '' } }).catch((e) => e)
     expect(error).toBeInstanceOf(ApiError)
     expect(error).toMatchObject({ status: 422, code: 'VALIDATION_ERROR', message: 'Request validation failed', requestId: 'abc123' })
     expect(error.isValidationError).toBe(true)
@@ -106,7 +106,7 @@ describe('api.js', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ success: false, error: { code: 'CONFLICT', message: 'Name taken', details: { field: 'name' }, request_id: 'r1' } }, { status: 409 }),
     )
-    const conflict = await itemsApi.create({ name: 'dup' }).catch((e) => e)
+    const conflict = await request('/things', { method: 'POST', body: { name: 'dup' } }).catch((e) => e)
     expect(conflict.fieldErrors).toEqual({ name: 'Name taken' })
 
     fetchMock.mockResolvedValueOnce(
@@ -128,7 +128,7 @@ describe('api.js', () => {
     window.addEventListener(AUTH_UNAUTHORIZED_EVENT, listener)
     fetchMock.mockResolvedValue(jsonResponse({ success: false, error: { code: 'UNAUTHORIZED', message: 'Token expired', details: null, request_id: 'x' } }, { status: 401 }))
 
-    const error = await request('/items').catch((e) => e)
+    const error = await request('/me').catch((e) => e)
     window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, listener)
 
     expect(error).toMatchObject({ status: 401, code: 'UNAUTHORIZED' })

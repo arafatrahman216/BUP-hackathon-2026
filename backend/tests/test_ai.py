@@ -107,7 +107,7 @@ async def test_rate_limit_on_ai_routes(client):
     assert "Retry-After" in limited.headers
     # Metadata reads and other routes are unaffected.
     assert (await client.get("/api/v1/ai/providers")).status_code == 200
-    assert (await client.get("/api/v1/items")).status_code == 200
+    assert (await client.get("/api/v1/health")).status_code == 200
 
 
 async def test_real_client_builds_from_settings():

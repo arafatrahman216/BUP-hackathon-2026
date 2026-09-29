@@ -1,15 +1,12 @@
 import { render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AuthProvider } from '../context/AuthProvider'
-import { ToastProvider } from '../context/ToastProvider'
 
 /** Render with the same providers the app uses (router in memory). */
 export function renderWithProviders(ui, { route = '/' } = {}) {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <ToastProvider>
-        <AuthProvider>{ui}</AuthProvider>
-      </ToastProvider>
+      <AuthProvider>{ui}</AuthProvider>
     </MemoryRouter>,
   )
 }

@@ -15,7 +15,7 @@ Feature requirements live in [features.md](features.md).
 |----------|--------|
 | Backend  | Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0 (async) |
 | Database | Supabase Postgres (via `asyncpg`, session pooler) |
-| Files    | Supabase Storage (REST API via `httpx`) |
+| Files    | Supabase Storage (REST API via `httpx`), as a repository with no routes |
 | AI       | Gemini, Groq, OmniRoute behind one `LLMClient` with an env-configured fallback chain |
 | Frontend | Vite + React 19 (JavaScript), react-router 7, CSS Modules, Vitest |
 | Run      | Docker + Docker Compose (hot reload for both apps) |
@@ -33,6 +33,9 @@ Feature requirements live in [features.md](features.md).
 └── CLAUDE.md             entry point for Claude Code (points here)
 ```
 
+The template ships **no demo business resources**. The only routes are `GET /health` and
+the `/ai` endpoints. Everything else gets built from features.md.
+
 ## 3. Backend
 
 ### 3.1 Folder by folder (`backend/app/`)
@@ -42,19 +45,19 @@ Feature requirements live in [features.md](features.md).
 | `main.py` | `create_app()`: middlewares, routers, lifespan (create tables, build the AI client, close HTTP clients). | Keep it thin. |
 | `core/config.py` | `Settings` (pydantic-settings). **Every** env var is declared here. Also builds the Supabase DB URL. | Never read `os.environ` elsewhere; use `get_settings()`. |
 | `core/database.py` | Async engine, `SessionLocal`, `get_db` dependency, `init_db()` (`create_all`). | |
-| `core/exceptions.py` | `AppException` and its subclasses (`NotFoundError`, `ConflictError`, `BadRequestError`, `UnauthorizedError`, `ForbiddenError`, `ExternalServiceError`, `ServiceUnavailableError`). | Services raise these; never return error dicts by hand. |
-| `core/dependencies.py` | Wiring: `get_<x>_service` builds a service with its repositories and clients. `DbSession`, `LLM` and `Storage` annotated types. | One `get_<feature>_service` per feature. |
-| `controllers/` | FastAPI routers (HTTP layer only): parse input, call one service method, return. One file per resource: `<name>_controller.py`. `__init__.py` registers all routers into `api_router`. | No business logic, no DB access. |
-| `services/` | Business logic: validation rules, orchestration, AI calls. `<name>_service.py` with a `<Name>Service` class. | No FastAPI imports (except `UploadFile`); raise `AppException`s. |
-| `repositories/` | Data access. `BaseRepository[Model]` gives generic async CRUD (`get`, `list`, `count`, `create`, `update`, `delete`). `storage_repository.py` wraps Supabase Storage. | Only layer that touches the DB session or storage API. |
-| `models/` | SQLAlchemy ORM models (`Base`, `TimestampMixin`). | Import every new model in `models/__init__.py`, or its table won't be created. |
-| `schemas/` | Pydantic request/response models. Per resource: `<Name>Create`, `<Name>Update`, `<Name>Read`. `common.py` has `ErrorResponse` and `Page[T]`. | Never return ORM objects without a `response_model`. |
+| `core/exceptions.py` | `AppException` and its subclasses (`BadRequestError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `ExternalServiceError`, `ServiceUnavailableError`). | Services raise these; never return error dicts by hand. |
+| `core/dependencies.py` | Wiring: `get_<x>_service` builds a service with its repositories and clients. Annotated types `DbSession`, `LLM` (AI client), `Storage` (Supabase Storage). | One `get_<feature>_service` per feature. |
+| `controllers/` | FastAPI routers (HTTP layer only). Now: `health_controller.py`, `ai_controller.py`. `__init__.py` registers every router into `api_router`. | Parse input, call one service method, return. No business logic, no DB access. |
+| `services/` | Business logic. Now: `ai_service.py`. One `<name>_service.py` with a `<Name>Service` class per feature. | No FastAPI imports (except `UploadFile`); raise `AppException`s. |
+| `repositories/` | Data access. Now: `storage_repository.py` (Supabase Storage: `upload`, `list`, `create_signed_url`, `public_url`, `delete`). One `<name>_repository.py` per table. | The only layer that touches the DB session or the storage API. |
+| `models/` | SQLAlchemy ORM: `base.py` has `Base` and `TimestampMixin` (`created_at`, `updated_at`). | Import every new model in `models/__init__.py`, or its table won't be created. |
+| `schemas/` | Pydantic request/response models. Now: `common.py` (`ErrorResponse`, generic `Page[T]`) and `ai.py`. Per resource: `<Name>Create`, `<Name>Update`, `<Name>Read`. | Always set a `response_model`; never return ORM objects raw. |
 | `middlewares/` | `cors.py`, `request_logging.py`, `error_handler.py`, `rate_limiter.py`, and `setup_middlewares()` in `__init__.py`. | See §3.3. |
-| `utils/` | Framework-agnostic helpers: `logger.py` (logging with request ids), `pagination.py` (`page_params` dependency, `build_page`). | |
+| `utils/` | `logger.py` (logging with request ids), `pagination.py` (`page_params` dependency + `build_page` → `Page[T]`). | Framework-agnostic helpers. |
 | `ai/` | Provider-agnostic LLM module (see §4). | |
 
 `backend/tests/`: pytest suite with fake AI providers, a mocked Supabase Storage API, and
-a throwaway SQLite database. Run it with `cd backend && pytest`.
+a throwaway SQLite database. Run it with `cd backend && .venv/bin/pytest`.
 
 ### 3.2 Request flow
 
@@ -71,7 +74,7 @@ HTTP → CORS → RequestLogging → CatchAllError → RateLimit → controller
 - **Error handler**: every error response has **one shape**:
   ```json
   {"success": false,
-   "error": {"code": "NOT_FOUND", "message": "Item 3 not found", "details": null, "request_id": "a1b2c3"}}
+   "error": {"code": "NOT_FOUND", "message": "Order 3 not found", "details": null, "request_id": "a1b2c3"}}
   ```
   | Source | Status / code |
   |---|---|
@@ -84,9 +87,9 @@ HTTP → CORS → RequestLogging → CatchAllError → RateLimit → controller
   | Storage not configured / failed | 503 `STORAGE_NOT_CONFIGURED` / 502 `STORAGE_ERROR` |
   | Rate limit | 429 `RATE_LIMITED` + `Retry-After` |
   | Anything else | 500 `INTERNAL_ERROR` (exception text in `details` only when `DEBUG=true`) |
-- **Rate limiter**: in-memory sliding window per client IP, applied only to paths starting with `RATE_LIMIT_PATH_PREFIXES` (default `/api/v1/ai`) and only to non-GET requests, so metadata reads like `GET /ai/providers` don't use up the quota. A route outside `/ai` that calls the LLM (e.g. `POST /items/{id}/generate-description`) is **not** limited unless you add its prefix.
+- **Rate limiter**: in-memory sliding window per client IP. It applies only to paths starting with `RATE_LIMIT_PATH_PREFIXES` (default `/api/v1/ai`) and only to non-GET requests. A feature route outside `/ai` that calls the LLM is **not** limited unless you add its prefix.
 
-Successful responses are the plain resource (no envelope). Lists use `Page[T]`:
+Successful responses are the plain resource (no envelope). Paginated lists use `Page[T]`:
 `{items, total, page, page_size, pages}`.
 
 ### 3.4 Database (Supabase)
@@ -96,26 +99,75 @@ Successful responses are the plain resource (no envelope). Lists use `Page[T]`:
 - `DATABASE_URL` set → overrides everything (tests use SQLite; handy for offline work).
 - Tables are created on startup with `Base.metadata.create_all`. There are no migrations, so changing an existing column means altering it by hand in the Supabase SQL editor (or dropping the table in dev).
 - Small connection pool (5 + 5 overflow), because the pooler caps connections per project.
-- Each repository write commits by default. Pass `commit=False` to group several writes, then call `await session.commit()` yourself.
+- Repositories commit their own writes: `add`/`setattr` → `await session.commit()` → `await session.refresh(obj)`. For multi-step atomic work, `flush()` in the repository and commit once in the service.
 
 ### 3.5 File storage (Supabase Storage)
 
-`StorageRepository` talks to `SUPABASE_URL/storage/v1` with the service-role key.
-`FileService` sanitizes names (`<folder>/<8-char-uuid>-<safe-name>`), rejects `..`, and
-enforces `MAX_UPLOAD_MB`. Endpoints: `GET /files?prefix=`, `POST /files` (multipart
-`file`, `folder`), `GET /files/signed-url?path=&expires_in=`, `DELETE /files?path=`.
-The bucket is public, so `public_url` works. For a private bucket, use `signed_url`.
+`StorageRepository` talks to `SUPABASE_URL/storage/v1` with the service-role key and the
+`SUPABASE_BUCKET_NAME` bucket. It has **no routes**. When a feature needs uploads, inject
+`Storage` into its service, sanitize file names there, reject `..`, and enforce
+`MAX_UPLOAD_MB`. The bucket is public, so `public_url(path)` works. For private access,
+use `create_signed_url(path, seconds)`.
 **The service-role key bypasses Row Level Security and must never reach the frontend.**
 
-### 3.6 Adding a backend feature (copy Items)
+### 3.6 Adding a backend feature (e.g. "orders")
 
-1. `models/<name>.py`, then import it in `models/__init__.py`
-2. `schemas/<name>.py` with `Create` / `Update` / `Read`
-3. `repositories/<name>_repository.py`: `class XRepository(BaseRepository[X]): model = X`
-4. `services/<name>_service.py`: business rules, raising `AppException`s
-5. `core/dependencies.py`: `get_<name>_service`
-6. `controllers/<name>_controller.py`, then register it in `controllers/__init__.py`
-7. `tests/test_<name>.py`
+```python
+# models/order.py  (then add `from app.models.order import Order` to models/__init__.py)
+class Order(TimestampMixin, Base):
+    __tablename__ = "orders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+
+# schemas/order.py
+class OrderCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+
+class OrderRead(OrderCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+
+# repositories/order_repository.py
+class OrderRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get(self, order_id: int) -> Order | None:
+        return await self.session.get(Order, order_id)
+
+    async def create(self, data: dict) -> Order:
+        order = Order(**data)
+        self.session.add(order)
+        await self.session.commit()
+        await self.session.refresh(order)
+        return order
+
+# services/order_service.py
+class OrderService:
+    def __init__(self, repo: OrderRepository) -> None:
+        self.repo = repo
+
+    async def get(self, order_id: int) -> Order:
+        order = await self.repo.get(order_id)
+        if order is None:
+            raise NotFoundError(f"Order {order_id} not found")
+        return order
+
+# core/dependencies.py
+def get_order_service(session: DbSession) -> OrderService:
+    return OrderService(OrderRepository(session))
+
+# controllers/order_controller.py  (then include_router in controllers/__init__.py)
+router = APIRouter(prefix="/orders", tags=["orders"])
+Service = Annotated[OrderService, Depends(get_order_service)]
+
+@router.get("/{order_id}", response_model=OrderRead)
+async def get_order(order_id: int, service: Service):
+    return await service.get(order_id)
+```
+
+Then add `tests/test_orders.py` using the `client` fixture from `tests/conftest.py`.
 
 ## 4. AI module (`backend/app/ai/`)
 
@@ -130,6 +182,8 @@ The bucket is public, so `public_url` works. For a private bucket, use `signed_u
 | `client.py` | `LLMClient`: walks the chain with fallback. Helpers: `chat()`, `complete()`, `complete_json()`, `describe()` |
 | `__init__.py` | `get_llm_client()` singleton (also a FastAPI dependency) |
 
+HTTP endpoints: `GET /ai/providers`, `POST /ai/chat`, `POST /ai/generate`.
+
 **Fallback configuration (env):**
 - `AI_PROVIDER_ORDER=gemini,groq,omniroute`: tried left to right. Entries can repeat (`gemini,gemini,groq` retries Gemini once) and can pin a model (`groq:llama-3.1-8b-instant`).
 - `AI_FALLBACK_ENABLED=false` → only the first entry is used.
@@ -137,7 +191,7 @@ The bucket is public, so `public_url` works. For a private bucket, use `signed_u
 - An unknown provider name in the chain fails at startup.
 - Passing `provider=` (and optionally `model=`) to `chat()` bypasses the chain.
 
-**Using AI in a feature:** inject `LLM` into your service (see `ItemService.generate_description`), then:
+**Using AI in a feature service:** take the `LLM` dependency in `get_<x>_service` and pass it to the service, then:
 ```python
 reply = await self.llm.complete("Summarize: ...", system="You are ...")   # reply.text
 data  = await self.llm.complete_json('Return {"tags": [string]} for: ...')  # parsed JSON
@@ -151,31 +205,33 @@ Not implemented yet: streaming responses, tool/function calling.
 
 ## 5. Frontend (`frontend/`)
 
-Vite + React 19 (JavaScript), react-router 7, CSS Modules, `lucide-react` icons, Vitest + Testing Library.
+Vite + React 19 (JavaScript), react-router 7, CSS Modules, Vitest + Testing Library.
+The template is intentionally minimal: one Home page showing backend health and the AI
+providers, plus a 404 page.
 
 ### 5.1 Folder by folder (`frontend/src/`)
 
 | Folder / file | What it holds | Rules |
 |---|---|---|
-| `api/api.js` | **The only module that talks HTTP.** Base URL from `VITE_API_BASE_URL`; `request()` wraps fetch (JSON or FormData bodies, query params, timeouts, Bearer token); every failure becomes an `ApiError` (`status, code, message, details, requestId, retryAfter`, plus `fieldErrors` for forms); on a 401 it clears the token and fires `auth:unauthorized`. Endpoints are grouped as `healthApi`, `itemsApi`, `aiApi`, `filesApi`. | Components never call `fetch` directly. Add endpoint functions here. |
-| `hooks/` | `useAsync` (load data: `data/error/loading/refetch`, cancels stale requests), `useMutation` (writes: returns `{data, error}`, optional toasts), `useItems` / `useFiles` (resource hooks, the pattern to copy), `useDebounce`, `useToast`, `useAuth`, `useTheme`, `useCopyToClipboard`. Re-exported from `hooks/index.js`. | Pages get data through hooks, not by calling `api.js` inline. |
-| `context/` | `AuthProvider` (token state synced with `api.js`), `ToastProvider`, and `AppProviders`, which wraps both. | |
-| `components/ui/` | Reusable primitives, each with its own `.module.css`: Button, Input, Textarea, Select, Switch, Field, Card, Badge, Modal, ConfirmDialog, Spinner, Skeleton, EmptyState, ErrorState, Pagination, Toast, Table. Exported from `components/ui/index.js`. | No data fetching in here. Reuse these before writing new markup. |
-| `components/layout/` | AppLayout (sidebar + header; the sidebar becomes a drawer below 960px), Sidebar, Header, PageHeader, and `navigation.js` (the nav items). | Add new pages to `navigation.js`. |
-| `pages/<Name>/` | One folder per page: `<Name>Page.jsx` plus its page-only components. Current pages: Dashboard, Items (the CRUD example), AIPlayground, Files (Supabase Storage), NotFound. | Pages are lazy-loaded in `App.jsx`. |
-| `styles/global.css` | Design tokens as CSS variables (neutral palette, indigo accent, spacing, radius, shadows, Inter / JetBrains Mono), light and dark themes (dark follows the OS, with a header toggle to override), and the reset. | Use the tokens. Don't hard-code colors. |
-| `utils/` | `cn` (classnames), `format` (dates, bytes, money), `errors` helpers. | |
-| `test/` | Vitest setup and render helpers. Tests sit next to their code (`*.test.js(x)`). | |
+| `api/api.js` | **The only module that talks HTTP.** Base URL from `VITE_API_BASE_URL`; `request()` wraps fetch (JSON or FormData bodies, query params, timeouts, Bearer token); every failure becomes an `ApiError` (`status, code, message, details, requestId, retryAfter`, plus `fieldErrors` for forms); on a 401 it clears the token and fires `auth:unauthorized`. Endpoint groups: `healthApi`, `aiApi`. | Components never call `fetch` directly. Add a `<feature>Api` group here. |
+| `hooks/` | `useAsync` (loads data: `data/error/loading/refetch`, cancels stale requests) and `useAuth`. Re-exported from `hooks/index.js`. | Put data logic in hooks (e.g. `useOrders`), not inline in pages. |
+| `context/` | `AuthContext` + `AuthProvider` (token state synced with `api.js`), and `AppProviders`, which wraps the router and every provider. | Add new app-wide providers in `AppProviders`. |
+| `components/ui/` | Reusable primitives, each with its own `.module.css`: `Button`, `Card`, `Spinner`. Exported from `components/ui/index.js`. | No data fetching in here. Add new primitives here. |
+| `components/layout/` | `AppLayout`: header with nav, and `<Outlet/>` for pages. | Add nav links here. |
+| `pages/<Name>/` | One folder per page: `<Name>Page.jsx` + `.module.css` + page-only components. Now: `Home`, `NotFound`. | Register the route in `App.jsx`. |
+| `styles/global.css` | Design tokens as CSS variables (colors, spacing, radius, fonts), light and dark via `prefers-color-scheme`, and the reset. | Use the tokens. Don't hard-code colors. |
+| `utils/` | `cn()` classnames helper. | |
+| `test/` | Vitest setup, `renderWithProviders`, `jsonResponse`. Tests sit next to their code (`*.test.js(x)`). | |
 
 ### 5.2 Adding a frontend feature
 
-1. Add endpoint functions to `api/api.js` (e.g. `ordersApi`).
-2. Add a hook in `hooks/` (copy `useItems`).
+1. Add an endpoint group to `api/api.js` (e.g. `ordersApi`).
+2. Add a hook in `hooks/` that wraps it with `useAsync`.
 3. Create `pages/Orders/OrdersPage.jsx` (+ `.module.css`) and build it from `components/ui`.
-4. Add the route in `App.jsx` and the nav entry in `components/layout/navigation.js`.
-5. Show errors with `ErrorState`, a toast, or `error.fieldErrors` on forms. The backend error shape is already parsed.
+4. Add the `<Route>` in `App.jsx` and a nav link in `components/layout/AppLayout.jsx`.
+5. Show errors with `error.message`, or `error.fieldErrors` on forms. The backend error shape is already parsed.
 
-**Auth:** the backend has no auth yet. The plumbing is ready: `setToken()` / `useAuth()` store a token, `api.js` sends it as `Authorization: Bearer`, and a 401 logs the user out. To add real auth, add a login endpoint and page and verify the token in a backend dependency.
+**Auth:** the backend has no auth yet. The plumbing is ready: `setToken()` / `useAuth().login(token)` store a token, `api.js` sends it as `Authorization: Bearer`, and a 401 logs the user out.
 
 ## 6. Configuration
 
@@ -201,17 +257,17 @@ Add a row whenever a design choice is made. Newest at the bottom.
 
 | Date | Area | Decision | Why |
 |---|---|---|---|
-| 2026-09-29 | Backend | Layered structure: controllers → services → repositories → models; schemas for I/O | Clear place for everything; easy to copy the Items resource |
+| 2026-09-29 | Backend | Layered structure: controllers → services → repositories → models; schemas for I/O | Clear place for everything |
 | 2026-09-29 | Backend | Async SQLAlchemy 2.0 + `create_all` on startup, no Alembic | Hackathon speed; add migrations if the schema stabilizes |
-| 2026-09-29 | Backend | Repository writes commit by default (`commit=False` to batch) | Commit happens before the response is sent; simple mental model |
+| 2026-09-29 | Backend | Repositories commit their own writes | Commit happens before the response is sent; simple mental model |
 | 2026-09-29 | Backend | One JSON error shape for every error; successful responses are unwrapped | Frontend handles errors in one place; OpenAPI stays accurate |
-| 2026-09-29 | Backend | In-memory rate limiter on AI route prefixes | Protects free-tier AI quotas; swap for Redis if running multiple instances |
+| 2026-09-29 | Backend | In-memory rate limiter on AI prefixes, counting non-GET requests only | Protects free-tier AI quotas; swap for Redis if running multiple instances |
 | 2026-09-29 | AI | Direct REST calls via `httpx` instead of vendor SDKs | Fewer dependencies, one error-handling path, easy to add providers |
 | 2026-09-29 | AI | Provider chain + fallback flag in env; repeats = retries; `provider:model` pins | User requirement: configurable fallback and order |
 | 2026-09-29 | Database | **Supabase** Postgres, URL built from `SUPABASE_*` vars; session pooler because the direct host is IPv6-only | User requirement; must work from Docker |
-| 2026-09-29 | Storage | Supabase Storage through `StorageRepository` (REST), service-role key server-side only | Uses the provided bucket; keeps secrets off the client |
-| 2026-09-29 | Frontend | Plain CSS Modules + CSS-variable design tokens, no UI kit | Full control over a clean look, zero lock-in, light/dark from one token set |
+| 2026-09-29 | Storage | Supabase Storage through `StorageRepository` (REST), service-role key server-side only, no routes by default | Ready for features that need uploads; keeps secrets off the client |
+| 2026-09-29 | Template | **No demo resources** (no Items/Files APIs or pages); only health + AI routes and a single Home page | User requirement: leftover demo files and routers could cause bugs in the real project |
+| 2026-09-29 | Frontend | Plain CSS Modules + CSS-variable design tokens, no UI kit, no icon library | Minimal and easy to restyle |
 | 2026-09-29 | Frontend | All HTTP through `api/api.js`; one `ApiError` type; data through hooks | One place for base URL, auth and error parsing; pages stay simple |
 | 2026-09-29 | Frontend | Backend URL in `frontend/.env` (`VITE_API_BASE_URL`) | Switch backends without code changes |
-| 2026-09-29 | Backend | Rate limiter counts only non-GET requests on AI prefixes | Dashboard loads of `GET /ai/providers` shouldn't use up the AI quota |
 | 2026-09-29 | DevOps | Docker Compose with source mounts + hot reload; no local DB container | One command to run everything; DB is hosted |

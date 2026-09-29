@@ -4,7 +4,7 @@
 @features.md
 
 ## Rules
-- Follow the structure and conventions in design.md. For new backend resources, copy the Items resource layer by layer.
+- Follow the structure and conventions in design.md (backend: §3.6, frontend: §5.2).
 - Build what features.md lists as `todo`. Mark features `done` and fill in their Notes when finished.
 - **Record every new design decision** (library, pattern, data model, UI convention) in design.md's decision log, and update the folder tables if you add folders.
 - New env vars: declare them in `backend/app/core/config.py` and document them in `backend/.env.example` (frontend: `frontend/.env.example`).

@@ -4,7 +4,7 @@
  * - Base URL comes from VITE_API_BASE_URL (see .env / .env.example).
  * - `request()` wraps fetch: JSON in/out, FormData passthrough, query params,
  *   timeouts via AbortController, Bearer token, and a single error type (ApiError).
- * - Endpoints are grouped per backend resource (healthApi, itemsApi, aiApi, filesApi).
+ * - Endpoints are grouped per backend resource (healthApi, aiApi, ...).
  *   To add one: write a function here that calls `request()`, then use it from a hook.
  */
 
@@ -79,7 +79,7 @@ export class ApiError extends Error {
   /**
    * Per-field messages for forms: {"name": "String should have at least 1 character"}.
    * Handles VALIDATION_ERROR details ([{field: "body.name", message}]) and
-   * CONFLICT details ({field: "name"}).
+   * details of the form {field: "name"} (e.g. CONFLICT).
    */
   get fieldErrors() {
     const errors = {}
@@ -234,16 +234,6 @@ export const healthApi = {
   check: (options) => api.get('/health', options),
 }
 
-export const itemsApi = {
-  /** @param {{page?: number, page_size?: number, search?: string, is_active?: boolean}} params */
-  list: (params, options) => api.get('/items', { ...options, params }),
-  get: (id, options) => api.get(`/items/${id}`, options),
-  create: (data, options) => api.post('/items', data, options),
-  update: (id, data, options) => api.patch(`/items/${id}`, data, options),
-  remove: (id, options) => api.delete(`/items/${id}`, options),
-  generateDescription: (id, options) => api.post(`/items/${id}/generate-description`, undefined, { timeout: AI_TIMEOUT_MS, ...options }),
-}
-
 export const aiApi = {
   providers: (options) => api.get('/ai/providers', options),
   /** @param {{messages: {role: string, content: string}[], provider?, model?, temperature?, max_tokens?, json_mode?}} payload */
@@ -252,14 +242,8 @@ export const aiApi = {
   generate: (payload, options) => api.post('/ai/generate', payload, { timeout: AI_TIMEOUT_MS, ...options }),
 }
 
-export const filesApi = {
-  list: ({ prefix = 'uploads' } = {}, options) => api.get('/files', { ...options, params: { prefix } }),
-  upload: (file, { folder = 'uploads' } = {}, options) => {
-    const form = new FormData()
-    form.append('file', file)
-    if (folder) form.append('folder', folder)
-    return api.post('/files', form, { timeout: 120_000, ...options })
-  },
-  signedUrl: (path, expiresIn = 3600, options) => api.get('/files/signed-url', { ...options, params: { path, expires_in: expiresIn } }),
-  remove: (path, options) => api.delete('/files', { ...options, params: { path } }),
-}
+// Add your feature endpoints below, e.g.:
+// export const ordersApi = {
+//   list: (params, options) => api.get('/orders', { ...options, params }),
+//   create: (data, options) => api.post('/orders', data, options),
+// }
