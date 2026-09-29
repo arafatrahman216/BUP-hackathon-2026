@@ -9,7 +9,8 @@ export function AppLayout() {
           BUP Fuel Operations
         </Link>
         <nav className={styles.nav}>
-          <Link to="/">Dashboard</Link>
+          <Link to="/">Operator console</Link>
+          <Link to="/pipeline">Pipeline</Link>
           <Link to="/status">Backend status</Link>
         </nav>
       </header>

@@ -10,9 +10,10 @@ const SSE_RETRY_MS = 5000
  * - Fallback: polls GET /dashboard every 2 s while the stream is down, and retries
  *   the stream every 5 s.
  *
+ * @param {{enabled?: boolean}} [options]  enabled=false: don't connect (e.g. demo mode)
  * @returns {{state: object|null, link: 'connecting'|'live'|'polling'|'offline', error: Error|null, refresh: () => Promise}}
  */
-export function useDashboard() {
+export function useDashboard({ enabled = true } = {}) {
   const [state, setState] = useState(null)
   const [link, setLink] = useState('connecting')
   const [error, setError] = useState(null)
@@ -31,6 +32,7 @@ export function useDashboard() {
   }, [])
 
   useEffect(() => {
+    if (!enabled) return undefined
     let source = null
     let retryTimer = null
     let closed = false
@@ -80,7 +82,7 @@ export function useDashboard() {
       clearTimeout(retryTimer)
       stopPolling()
     }
-  }, [refresh])
+  }, [refresh, enabled])
 
   return { state, link, error, refresh }
 }
