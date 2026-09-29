@@ -53,6 +53,7 @@ class FakeSimulator:
         self.down = False
         self.stale = False
         self.refuse: str | None = None  # 409 code to return on POST /v1/allocations
+        self.lose_answer = False  # POST creates the allocation but answers 503 (response lost)
         self.posts: list[dict] = []
 
     def station(self, station_id: str) -> dict:
@@ -80,11 +81,16 @@ class FakeSimulator:
             body = json.loads(request.content)
             if self.refuse:
                 return httpx.Response(409, json={"detail": {"code": self.refuse, "message": "refused"}})
+            earlier = next((a for a in self.world["allocations"] if a["idempotency_key"] == body["idempotency_key"]), None)
+            if earlier:  # idempotent replay
+                return httpx.Response(201, json=earlier)
             allocation = {**body, "id": len(self.posts) + 1, "created_tick": self.world["instance"]["tick"],
                           "departure_tick": None, "expected_arrival_tick": None, "actual_arrival_tick": None,
                           "status": "PENDING", "failure_reason": None}
             self.posts.append(body)
             self.world["allocations"].insert(0, allocation)
+            if self.lose_answer:
+                return httpx.Response(503, json={"error": {"code": "FAULT_INJECTED", "message": "lost"}})
             return httpx.Response(201, json=allocation)
         if path == "/v1/demand-history":
             return httpx.Response(200, json=self._history(int(request.url.params.get("limit", 200))), headers=headers)

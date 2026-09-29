@@ -17,7 +17,7 @@ import math
 from typing import Any
 
 from app.pipeline.demand_model import Residual, active_at, event_touches
-from app.pipeline.types import Alert, World
+from app.pipeline.types import Alert, Forecast, World
 
 SEVERITY = {"info": 0, "warning": 1, "critical": 2}
 
@@ -262,4 +262,13 @@ def detect(world: World) -> list[Alert]:
     return Detector().detect(world)
 
 
-__all__ = ["Detector", "detect", "active_at"]
+def stockout_alerts(forecasts: dict[tuple[str, str], Forecast]) -> list[Alert]:
+    """Predict-stage alerts: station/fuels whose cover is below lead time + urgent margin."""
+    return [
+        Alert("critical", "STOCKOUT_RISK", f"{f.station_id} {f.fuel_type} covers {f.cover_ticks:.1f} ticks, "
+              f"lead time {f.lead_ticks} ticks", f.station_id)
+        for f in forecasts.values() if f.risk == "urgent" and f.cover_ticks is not None
+    ]
+
+
+__all__ = ["Detector", "detect", "stockout_alerts", "active_at"]

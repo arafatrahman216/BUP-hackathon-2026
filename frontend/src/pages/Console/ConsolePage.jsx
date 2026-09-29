@@ -79,11 +79,15 @@ export default function ConsolePage() {
 
       {rec && (
         <RecommendationModal key={rec.id} rec={rec} simDown={model.simDown} onClose={() => setRecId(null)} onAsk={c.ask}
+                             onQuestions={c.questions}
                              onApprove={(r, qty) => run(() => c.approve(r, qty))}
                              onReject={(r) => run(() => c.reject(r))} />
       )}
 
-      {entry && <LogModal entry={entry} badge={c.logBadge} aiDown={model.aiDown} onClose={() => setLogId(null)} />}
+      {entry && (
+        <LogModal key={entry.id} entry={entry} badge={c.logBadge} aiDown={model.aiDown} onClose={() => setLogId(null)}
+                  onAsk={c.ask} onQuestions={c.questions} />
+      )}
 
       {toast && <div className={styles.toast} role="status">{toast}</div>}
     </div>

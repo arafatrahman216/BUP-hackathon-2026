@@ -48,6 +48,14 @@ class RecommendationRepository:
         )
         return list(rows)
 
+    async def posted_between(self, first_tick: int, last_tick: int) -> list[Recommendation]:
+        rows = await self.session.scalars(
+            select(Recommendation)
+            .where(Recommendation.status == RecommendationStatus.POSTED,
+                   Recommendation.posted_tick.between(first_tick, last_tick))
+        )
+        return list(rows)
+
     async def recent(self, limit: int) -> list[Recommendation]:
         rows = await self.session.scalars(select(Recommendation).order_by(Recommendation.id.desc()).limit(limit).execution_options(populate_existing=True))
         return list(rows)

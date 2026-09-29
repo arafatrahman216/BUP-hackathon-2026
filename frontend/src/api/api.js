@@ -257,3 +257,11 @@ export const recommendationsApi = {
   approve: (id, body = {}, options) => api.post(`/recommendations/${id}/approve`, body, options),
   reject: (id, body = {}, options) => api.post(`/recommendations/${id}/reject`, body, options),
 }
+
+export const explainApi = {
+  /** Suggested questions for the recommendation's status + the questions already asked (newest first). */
+  questions: (recId, options) => api.get(`/explain/recommendations/${recId}`, options),
+  /** Ask the AI about one recommendation; the answer is stored. */
+  ask: (recId, question, options) =>
+    api.post(`/explain/recommendations/${recId}`, { question }, { timeout: AI_TIMEOUT_MS, ...options }),
+}

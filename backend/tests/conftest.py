@@ -28,6 +28,7 @@ import pytest  # noqa: E402
 from app.ai import ChatMessage, LLMClient, LLMResponse, ProviderError, get_llm_client  # noqa: E402
 from app.ai.client import ChainEntry  # noqa: E402
 from app.ai.providers.base import BaseLLMProvider  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 from app.core.database import engine  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models import Base  # noqa: E402
@@ -92,6 +93,12 @@ async def app(fake_llm, fake_sim):
     app.dependency_overrides[get_simulator_repository] = lambda: sim_repo
     reset_pipeline_state()  # fresh cache + lock bound to this test's event loop
     return app
+
+
+@pytest.fixture
+def manual_approval(monkeypatch):
+    """Every plan becomes an operator card (urgency alone is auto-posted)."""
+    monkeypatch.setattr(get_settings(), "AUTO_POST_ENABLED", False)
 
 
 @pytest.fixture

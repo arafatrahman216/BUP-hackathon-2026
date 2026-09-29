@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { aiApi, recommendationsApi } from '../api/api'
+import { explainApi, recommendationsApi } from '../api/api'
 import { DEMO_LOOP, DEMO_START, DEMO_STATES, buildDemoModel, demoDecisionEntry } from '../utils/console/demo'
 import { fmt } from '../utils/console/format'
-import { ASK_SYSTEM, askPrompt, isComplete, isGrounded } from '../utils/console/grounding'
 import { buildLiveModel } from '../utils/console/live'
 import { useDashboard } from './useDashboard'
 
@@ -11,8 +10,19 @@ const DEMO_TICK_MS = 3000
 const THEME_KEY = 'fuelops.theme'
 const AI_BADGE = 'Written by AI'
 const TEMPLATE_BADGE = 'Template text · AI unavailable'
-// Gemini 2.5 counts hidden "thinking" tokens against this budget: 220 cut answers mid-sentence
-const AI_MAX_TOKENS = 1024
+// demo answers are keyed by these (utils/console/demo.js); live questions come from the backend
+const DEMO_QUESTIONS = ['Why not Patiya?', 'Wait an hour?', 'If the road closes?']
+const WHY = {
+  rec: 'Why is this shipment recommended?',
+  log: 'Why was this action taken, and what happened to it?',
+}
+
+const providerName = (p) => (p ? p.charAt(0).toUpperCase() + p.slice(1) : null)
+/** A stored backend Q&A → the answer shape the console shows. */
+export const toAnswer = (qa) => ({
+  q: qa.question, text: qa.answer, at: qa.tick, context: qa.context,
+  badge: providerName(qa.provider) ? `${AI_BADGE} (${providerName(qa.provider)} · ${qa.model})` : AI_BADGE,
+})
 
 function readTheme() {
   try {
@@ -109,25 +119,42 @@ export function useConsole() {
     [source, t, refresh],
   )
 
-  /** Ask a question about a recommendation. Resolves to {text, badge}. */
+  /**
+   * Suggested questions for an action (queue item or log entry) and the answers already stored.
+   * Live: GET /explain/recommendations/{id} (suggestions depend on the recommendation's status).
+   */
+  const questions = useCallback(
+    async (item, kind = 'rec') => {
+      if (source === 'demo') return { suggestions: kind === 'rec' ? DEMO_QUESTIONS : [], history: [] }
+      try {
+        const res = await explainApi.questions(item.id)
+        return { suggestions: res.suggestions ?? [], history: (res.items ?? []).map(toAnswer) }
+      } catch {
+        return { suggestions: [], history: [] } // "Ask why" and the free-text box still work
+      }
+    },
+    [source],
+  )
+
+  /**
+   * Ask about an action. `question` is 'why' or free text. Resolves to {q, text, badge, context?}.
+   * Live: POST /explain/recommendations/{id}: the backend builds the metrics for this action (pipeline
+   * forecasts/alerts, its truck, demand history from the simulator), asks Gemini and stores the answer.
+   */
   const ask = useCallback(
-    async (rec, question) => {
+    async (item, question, kind = 'rec') => {
       if (source === 'demo') {
         await new Promise((r) => setTimeout(r, 800))
-        if (demo === 'aidown') return { text: rec.tpl, badge: TEMPLATE_BADGE }
-        return { text: question === 'why' ? rec.why : rec.answers?.[question] ?? rec.why, badge: `${AI_BADGE} (Gemini)` }
+        if (demo === 'aidown') return { q: question, text: item.tpl, badge: TEMPLATE_BADGE }
+        const why = item.why ?? item.summary
+        return { q: question, text: question === 'why' ? why : item.answers?.[question] ?? why, badge: `${AI_BADGE} (Gemini)` }
       }
       try {
-        const res = await aiApi.generate({ prompt: askPrompt(rec.facts, question), system: ASK_SYSTEM, max_tokens: AI_MAX_TOKENS, temperature: 0.2 })
-        const text = (res?.text || '').trim()
-        if (isComplete(text) && isGrounded(text, rec.facts)) {
-          const provider = res.provider ? res.provider.charAt(0).toUpperCase() + res.provider.slice(1) : null
-          return { text, badge: provider ? `${AI_BADGE} (${provider})` : AI_BADGE }
-        }
-      } catch {
-        /* AI unavailable or rate limited: fall back to the template below */
+        return { ...toAnswer(await explainApi.ask(item.id, question === 'why' ? WHY[kind] : question)), q: question }
+      } catch (err) {
+        const why = err?.code === 'RATE_LIMITED' ? ` · too many questions, retry in ${err.retryAfter ?? 60} s` : ''
+        return { q: question, text: item.tpl, badge: `${TEMPLATE_BADGE}${why}` }
       }
-      return { text: rec.tpl, badge: TEMPLATE_BADGE }
     },
     [source, demo],
   )
@@ -145,6 +172,7 @@ export function useConsole() {
     approve,
     reject,
     ask,
+    questions,
     // badge for stored explanations (log modal): the backend's are engine-written templates
     logBadge: model?.aiDown ? TEMPLATE_BADGE : source === 'demo' ? `${AI_BADGE} (Gemini)` : 'Written by the decision engine',
   }

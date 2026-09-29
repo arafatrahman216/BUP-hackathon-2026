@@ -114,6 +114,69 @@ describe('ConsolePage · live backend', () => {
     expect(await screen.findByText('Sent 6,500 L. Tracking in the action log.')).toBeInTheDocument()
   })
 
+  it('asks the explain API about a queued action and a logged action', async () => {
+    vi.stubGlobal('EventSource', undefined)
+    const qa = (id, question, answer) => ({
+      id: 1, recommendation_id: id, tick: 150, question, answer, profile: 'recommendation', provider: 'gemini',
+      model: 'gemini-3.8-flash', context: { forecast: { PETROL: { cover_ticks: 13 } } }, errors: [], created_at: '2026-09-29T10:00:00',
+    })
+    const fetchMock = vi.fn((url, init) => {
+      const u = String(url)
+      const m = u.match(/\/explain\/recommendations\/(\d+)$/)
+      if (m && init?.method === 'POST') {
+        const { question } = JSON.parse(init.body)
+        return Promise.resolve(jsonResponse(qa(Number(m[1]), question, `Answer for ${m[1]}: ${question}`)))
+      }
+      if (m) {
+        return Promise.resolve(jsonResponse({ recommendation_id: Number(m[1]), status: m[1] === '7' ? 'PENDING_APPROVAL' : 'POSTED',
+          suggestions: m[1] === '7' ? ['What happens if I reject it?'] : ['Was the quantity right?'],
+          items: m[1] === '5' ? [qa(5, 'Why was this shipment sent?', 'Tongi diesel was below the reorder point.')] : [] }))
+      }
+      return Promise.resolve(jsonResponse(state))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithProviders(<ConsolePage />)
+
+    // action queue -> suggested question from the backend -> POST /explain/recommendations/7
+    await userEvent.click(within(await screen.findByRole('region', { name: 'Action queue' })).getByRole('button'))
+    let dialog = screen.getByRole('dialog')
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'What happens if I reject it?' }))
+    expect(await within(dialog).findByText('Answer for 7: What happens if I reject it?')).toBeInTheDocument()
+    expect(within(dialog).getByText('Written by AI (Gemini · gemini-3.8-flash)')).toBeInTheDocument()
+    expect(within(dialog).getByText('Data the AI used')).toBeInTheDocument()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+
+    // action log -> earlier answers are listed, "Ask why" asks about that action
+    await userEvent.click(within(screen.getByRole('region', { name: 'Action log' })).getAllByRole('button')[0])
+    dialog = screen.getByRole('dialog')
+    expect(await within(dialog).findByText('Earlier questions (1)')).toBeInTheDocument()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Ask why' }))
+    expect(await within(dialog).findByText(/Answer for 5: Why was this action taken/)).toBeInTheDocument()
+
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Ask your own question' }), 'Did it arrive on time?')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Ask' }))
+    expect(await within(dialog).findByText('Answer for 5: Did it arrive on time?')).toBeInTheDocument()
+
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST').map(([u, init]) => [String(u), JSON.parse(init.body).question])
+    expect(posts).toEqual([
+      [expect.stringMatching(/\/explain\/recommendations\/7$/), 'What happens if I reject it?'],
+      [expect.stringMatching(/\/explain\/recommendations\/5$/), 'Why was this action taken, and what happened to it?'],
+      [expect.stringMatching(/\/explain\/recommendations\/5$/), 'Did it arrive on time?'],
+    ])
+  })
+
+  it('shows template text when the explain API fails', async () => {
+    vi.stubGlobal('EventSource', undefined)
+    vi.stubGlobal('fetch', vi.fn((url, init) => Promise.resolve(String(url).includes('/explain/') && init?.method === 'POST'
+      ? jsonResponse({ success: false, error: { code: 'AI_PROVIDERS_FAILED', message: 'down' } }, { status: 502 })
+      : jsonResponse(state))))
+    renderWithProviders(<ConsolePage />)
+    await userEvent.click(within(await screen.findByRole('region', { name: 'Action queue' })).getByRole('button'))
+    await userEvent.click(screen.getByRole('button', { name: 'Ask why' }))
+    expect(await screen.findByText('Template text · AI unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Mirpur Fuel Station PETROL holds 2,400 of 14,000 L.', { selector: 'p' })).toBeInTheDocument()
+  })
+
   it('falls back to the demo scenario when the backend is unreachable', async () => {
     vi.stubGlobal('EventSource', undefined)
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))))
